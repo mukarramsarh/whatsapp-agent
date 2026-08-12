@@ -109,6 +109,9 @@ services:
       BRIDGE_PORT: 5021
       WEBHOOK_URL: ${WEBHOOK_URL:-http://bridge:5021/webhook}
       LOG_LEVEL: INFO
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-evolution}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
     networks:
       - wa-network
     depends_on:
