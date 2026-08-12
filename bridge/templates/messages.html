@@ -2,95 +2,131 @@
 {% set active = "messages" %}
 
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-4">
-  <h5 class="mb-0 fw-semibold">
-    Messages
+<!-- Header -->
+<div class="flex items-center justify-between mb-6">
+  <div>
+    <h1 class="text-xl font-semibold text-slate-800">Messages</h1>
     {% if selected_user %}
-      <span class="text-muted fw-normal fs-6 ms-1">— +{{ selected_user.number }}{% if selected_user.name %} ({{ selected_user.name }}){% endif %}</span>
+    <p class="text-sm text-slate-500 mt-0.5">
+      Conversation with <span class="font-medium text-slate-700">+{{ selected_user.number }}</span>
+      {% if selected_user.name %}<span class="text-slate-400"> — {{ selected_user.name }}</span>{% endif %}
+    </p>
     {% endif %}
-  </h5>
+  </div>
   {% if selected_user %}
-  <button class="btn btn-success btn-sm" data-bs-toggle="modal" data-bs-target="#replyModal"
-          data-number="{{ selected_user.number }}" data-userid="{{ selected_user.id }}">
-    <i class="bi bi-reply-fill me-1"></i> Reply to +{{ selected_user.number }}
+  <button onclick="openReply('{{ selected_user.number }}', '{{ selected_user.id }}')"
+          class="flex items-center gap-1.5 bg-wa text-white text-sm font-medium px-4 py-2 rounded-lg hover:bg-wa-dark transition-colors">
+    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+            d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"/>
+    </svg>
+    Reply
   </button>
   {% endif %}
 </div>
 
 <!-- Filter bar -->
-<div class="card shadow-sm mb-3">
-  <div class="card-body py-2">
-    <form method="get" class="d-flex gap-2 align-items-center">
-      <label class="text-muted small me-1 mb-0">Filter by user:</label>
-      <select name="user_id" class="form-select form-select-sm w-auto">
-        <option value="">All users</option>
-        {% for u in users %}
-        <option value="{{ u.id }}" {% if u.id == user_id %}selected{% endif %}>
-          +{{ u.number }}{% if u.name %} — {{ u.name }}{% endif %}
-        </option>
-        {% endfor %}
-      </select>
-      <button type="submit" class="btn btn-sm btn-primary">Apply</button>
-      {% if user_id %}
-      <a href="/admin/messages" class="btn btn-sm btn-outline-secondary">Clear</a>
-      {% endif %}
-    </form>
-  </div>
+<div class="bg-white rounded-xl shadow-sm px-4 py-3 mb-4 flex items-center gap-3">
+  <form method="get" class="flex items-center gap-3">
+    <label class="text-xs text-slate-500 font-medium uppercase tracking-wide">Filter</label>
+    <select name="user_id" onchange="this.form.submit()"
+            class="border border-slate-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-wa focus:border-wa">
+      <option value="">All users</option>
+      {% for u in users %}
+      <option value="{{ u.id }}" {% if u.id == user_id %}selected{% endif %}>
+        +{{ u.number }}{% if u.name %} — {{ u.name }}{% endif %}
+      </option>
+      {% endfor %}
+    </select>
+    {% if user_id %}
+    <a href="/admin/messages"
+       class="text-sm text-slate-400 hover:text-slate-600 transition-colors">Clear</a>
+    {% endif %}
+  </form>
+  {% if messages %}
+  <span class="ml-auto text-xs text-slate-400">{{ messages | length }} message{% if messages | length != 1 %}s{% endif %}</span>
+  {% endif %}
 </div>
 
-<div class="card shadow-sm">
-  <table class="table table-hover align-middle mb-0">
-    <thead class="table-dark">
-      <tr>
-        <th>Time</th>
-        <th>Number</th>
-        <th>Dir</th>
-        <th>Message</th>
-        <th>Status</th>
-        <th></th>
+<!-- Messages table -->
+<div class="bg-white rounded-xl shadow-sm overflow-hidden">
+  <table class="w-full text-sm">
+    <thead>
+      <tr class="bg-slate-800 text-slate-300 text-xs uppercase tracking-wider">
+        <th class="text-left px-4 py-3">Time</th>
+        <th class="text-left px-4 py-3">Number</th>
+        <th class="text-left px-4 py-3">Dir</th>
+        <th class="text-left px-4 py-3">Message</th>
+        <th class="text-left px-4 py-3">Status</th>
+        <th class="px-4 py-3"></th>
       </tr>
     </thead>
-    <tbody>
+    <tbody class="divide-y divide-slate-100">
       {% for row in messages %}
-      <tr class="{% if row.message.direction == 'outbound' %}table-light{% endif %}">
-        <td class="text-muted small text-nowrap">
+      <tr class="hover:bg-slate-50 transition-colors {% if row.message.direction == 'outbound' %}bg-wa/5{% endif %}">
+        <td class="px-4 py-3 text-slate-400 text-xs whitespace-nowrap">
           {{ row.message.created_at.strftime('%Y-%m-%d %H:%M') if row.message.created_at else '—' }}
         </td>
-        <td class="fw-semibold small">
-          +{{ row.user.number }}
-          {% if row.user.name %}<br><span class="text-muted fw-normal">{{ row.user.name }}</span>{% endif %}
+        <td class="px-4 py-3">
+          <div class="font-semibold text-slate-700">+{{ row.user.number }}</div>
+          {% if row.user.name %}
+          <div class="text-xs text-slate-400">{{ row.user.name }}</div>
+          {% endif %}
         </td>
-        <td>
+        <td class="px-4 py-3">
           {% if row.message.direction == 'inbound' %}
-            <span class="badge bg-info text-dark"><i class="bi bi-arrow-down-left"></i> In</span>
+          <span class="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-50 text-blue-600 text-xs font-medium rounded-full">
+            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"/>
+            </svg>
+            In
+          </span>
           {% else %}
-            <span class="badge bg-success"><i class="bi bi-arrow-up-right"></i> Out</span>
+          <span class="inline-flex items-center gap-1 px-2 py-0.5 bg-wa/10 text-wa-dark text-xs font-medium rounded-full">
+            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18"/>
+            </svg>
+            Out
+          </span>
           {% endif %}
         </td>
-        <td style="max-width:420px; white-space:pre-wrap; word-break:break-word;">
-          {{ row.message.message or '—' }}
+        <td class="px-4 py-3 max-w-sm">
+          <span class="text-slate-700 break-words whitespace-pre-wrap">{{ row.message.message or '—' }}</span>
           {% if row.message.attachment %}
-            <br><small class="text-muted"><i class="bi bi-paperclip"></i> {{ row.message.attachment }}</small>
+          <div class="flex items-center gap-1 text-xs text-slate-400 mt-1">
+            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                    d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/>
+            </svg>
+            {{ row.message.attachment }}
+          </div>
           {% endif %}
         </td>
-        <td><span class="badge bg-secondary">{{ row.message.status }}</span></td>
-        <td>
+        <td class="px-4 py-3">
+          <span class="inline-block px-2 py-0.5 bg-slate-100 text-slate-500 text-xs rounded">
+            {{ row.message.status }}
+          </span>
+        </td>
+        <td class="px-4 py-3">
           {% if row.message.direction == 'inbound' %}
-          <button class="btn btn-sm btn-outline-success reply-btn"
-                  data-bs-toggle="modal" data-bs-target="#replyModal"
-                  data-number="{{ row.user.number }}"
-                  data-userid="{{ row.user.id }}"
-                  title="Reply">
-            <i class="bi bi-reply"></i>
+          <button onclick="openReply('{{ row.user.number }}', '{{ row.user.id }}')"
+                  class="p-1.5 rounded hover:bg-wa/10 text-slate-400 hover:text-wa-dark transition-colors" title="Reply">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                    d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"/>
+            </svg>
           </button>
           {% endif %}
         </td>
       </tr>
       {% else %}
       <tr>
-        <td colspan="6" class="text-center text-muted py-5">
-          <i class="bi bi-chat-dots fs-3 d-block mb-2 opacity-25"></i>
-          No messages yet.
+        <td colspan="6" class="text-center py-16 text-slate-400">
+          <svg class="w-10 h-10 mx-auto mb-3 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+                  d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/>
+          </svg>
+          <p class="text-sm">No messages yet.</p>
         </td>
       </tr>
       {% endfor %}
@@ -99,30 +135,47 @@
 </div>
 
 <!-- Reply Modal -->
-<div class="modal fade" id="replyModal" tabindex="-1">
-  <div class="modal-dialog">
-    <form action="/admin/reply" method="post" class="modal-content">
-      <div class="modal-header">
-        <h5 class="modal-title"><i class="bi bi-reply-fill me-2"></i>Send Reply</h5>
-        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+<div id="replyModal" class="hidden fixed inset-0 z-50 flex items-center justify-center">
+  <div class="absolute inset-0 bg-black/40 backdrop-blur-sm" onclick="closeModal()"></div>
+  <div class="relative bg-white rounded-2xl shadow-xl w-full max-w-md mx-4">
+    <form action="/admin/reply" method="post">
+      <div class="flex items-center justify-between px-6 pt-5 pb-4 border-b border-slate-100">
+        <h2 class="font-semibold text-slate-800">Send Reply</h2>
+        <button type="button" onclick="closeModal()"
+                class="text-slate-400 hover:text-slate-600 transition-colors">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
       </div>
-      <div class="modal-body">
-        <div class="mb-3">
-          <label class="form-label fw-semibold">To</label>
-          <input type="text" id="modalNumber" name="number" class="form-control"
-                 readonly style="background:#f8f9fa;">
-          <input type="hidden" id="modalUserId" name="user_id">
+
+      <div class="px-6 py-5 space-y-4">
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">To</label>
+          <input type="text" id="replyNumber" name="number" readonly
+                 class="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-600 outline-none">
+          <input type="hidden" id="replyUserId" name="user_id">
         </div>
-        <div class="mb-2">
-          <label class="form-label fw-semibold">Message</label>
-          <textarea name="text" class="form-control" rows="4"
-                    placeholder="Type your message…" required></textarea>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Message</label>
+          <textarea id="replyText" name="text" rows="4" required
+                    placeholder="Type your message…"
+                    class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-wa focus:border-wa resize-none"></textarea>
         </div>
       </div>
-      <div class="modal-footer">
-        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-        <button type="submit" class="btn btn-success">
-          <i class="bi bi-send-fill me-1"></i> Send
+
+      <div class="flex justify-end gap-2 px-6 pb-5">
+        <button type="button" onclick="closeModal()"
+                class="px-4 py-2 text-sm text-slate-600 hover:text-slate-800 transition-colors">
+          Cancel
+        </button>
+        <button type="submit"
+                class="flex items-center gap-1.5 px-4 py-2 bg-wa text-white text-sm font-medium rounded-lg hover:bg-wa-dark transition-colors">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                  d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
+          </svg>
+          Send
         </button>
       </div>
     </form>
@@ -132,13 +185,16 @@
 
 {% block scripts %}
 <script>
-  // Populate reply modal from any trigger (table row button or top reply button)
-  document.getElementById('replyModal').addEventListener('show.bs.modal', function (e) {
-    const trigger = e.relatedTarget;
-    if (trigger && trigger.dataset.number) {
-      document.getElementById('modalNumber').value = '+' + trigger.dataset.number;
-      document.getElementById('modalUserId').value = trigger.dataset.userid;
-    }
-  });
+  function openReply(number, userId) {
+    document.getElementById('replyNumber').value = '+' + number;
+    document.getElementById('replyUserId').value = userId;
+    document.getElementById('replyText').value = '';
+    document.getElementById('replyModal').classList.remove('hidden');
+    document.getElementById('replyText').focus();
+  }
+  function closeModal() {
+    document.getElementById('replyModal').classList.add('hidden');
+  }
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
 </script>
 {% endblock %}
