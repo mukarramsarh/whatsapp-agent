@@ -39,7 +39,7 @@
       {% endfor %}
     </select>
     {% if user_id %}
-    <a href="/admin/messages"
+    <a href="/messages"
        class="text-sm text-slate-400 hover:text-slate-600 transition-colors">Clear</a>
     {% endif %}
   </form>
@@ -138,7 +138,7 @@
 <div id="replyModal" class="hidden fixed inset-0 z-50 flex items-center justify-center">
   <div class="absolute inset-0 bg-black/40 backdrop-blur-sm" onclick="closeModal()"></div>
   <div class="relative bg-white rounded-2xl shadow-xl w-full max-w-md mx-4">
-    <form action="/admin/reply" method="post">
+    <form action="/reply" method="post">
       <div class="flex items-center justify-between px-6 pt-5 pb-4 border-b border-slate-100">
         <h2 class="font-semibold text-slate-800">Send Reply</h2>
         <button type="button" onclick="closeModal()"

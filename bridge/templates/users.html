@@ -55,7 +55,7 @@
           </span>
         </td>
         <td class="px-4 py-3">
-          <form action="/admin/users/{{ user.id }}/toggle" method="post">
+          <form action="/users/{{ user.id }}/toggle" method="post">
             <button type="submit"
               class="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium transition-colors
               {% if user.allowed %}
@@ -89,7 +89,7 @@
                       d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/>
               </svg>
             </a>
-            <form action="/admin/users/{{ user.id }}/delete" method="post"
+            <form action="/users/{{ user.id }}/delete" method="post"
                   onsubmit="return confirm('Delete +{{ user.number }} and all their messages?')">
               <button type="submit"
                       class="p-1.5 rounded hover:bg-red-50 text-slate-400 hover:text-red-500 transition-colors" title="Delete">
@@ -121,7 +121,7 @@
 <div id="addModal" class="hidden fixed inset-0 z-50 flex items-center justify-center">
   <div class="absolute inset-0 bg-black/40 backdrop-blur-sm" onclick="closeModal('addModal')"></div>
   <div class="relative bg-white rounded-2xl shadow-xl w-full max-w-md mx-4">
-    <form action="/admin/users/add" method="post">
+    <form action="/users/add" method="post">
       <div class="flex items-center justify-between px-6 pt-5 pb-4 border-b border-slate-100">
         <h2 class="font-semibold text-slate-800">Add Number</h2>
         <button type="button" onclick="closeModal('addModal')"
