@@ -116,6 +116,9 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      MEDIA_DIR: /app/media
+    volumes:
+      - media_data:/app/media
     networks:
       - wa-network
     depends_on:
@@ -145,6 +148,7 @@ volumes:
   redis_data:
   evolution_instances:
   pgadmin_data:
+  media_data:
 
 networks:
   wa-network:

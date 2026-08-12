@@ -1,22 +1,21 @@
+import json
 import os
 import secrets
+from pathlib import Path
 from typing import Optional
 
-import httpx
-from fastapi import APIRouter, Depends, Form, HTTPException, Request, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import AsyncSessionLocal, Message, User
+from whatsapp import MEDIA_DIR, save_upload, send_media, send_text
 
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin")
-EVOLUTION_API_URL = os.getenv("EVOLUTION_API_URL", "http://evolution-api:8080")
-EVOLUTION_API_KEY = os.getenv("EVOLUTION_API_KEY", "")
-INSTANCE_NAME = os.getenv("INSTANCE_NAME", "STC")
 
 security = HTTPBasic()
 templates = Jinja2Templates(directory="templates")
@@ -43,8 +42,29 @@ async def get_db():
         yield session
 
 
+def _parse_attachment(raw: str | None) -> dict | None:
+    if not raw:
+        return None
+    try:
+        return json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return {"name": str(raw), "mime": "", "path": None, "size": 0}
+
+
 # ---------------------------------------------------------------------------
-# Root → Users
+# Media serving (auth-protected)
+# ---------------------------------------------------------------------------
+
+@router.get("/media/{filename}")
+async def serve_media(filename: str, _: str = Depends(require_auth)):
+    file_path = MEDIA_DIR / filename
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(file_path)
+
+
+# ---------------------------------------------------------------------------
+# Root
 # ---------------------------------------------------------------------------
 
 @router.get("/", response_class=RedirectResponse)
@@ -82,9 +102,7 @@ async def add_user(
     existing = await db.execute(select(User).where(User.number == number))
     if existing.scalar_one_or_none():
         return RedirectResponse(url="/users?error=exists", status_code=303)
-
-    user = User(number=number, role=role, allowed=bool(allowed), status="active")
-    db.add(user)
+    db.add(User(number=number, role=role, allowed=bool(allowed), status="active"))
     await db.commit()
     return RedirectResponse(url="/users", status_code=303)
 
@@ -137,7 +155,10 @@ async def admin_messages(
     query = query.order_by(Message.created_at.desc()).limit(200)
 
     rows = (await db.execute(query)).all()
-    messages = [{"message": m, "user": u} for m, u in rows]
+    messages = [
+        {"message": m, "user": u, "attachment": _parse_attachment(m.attachment)}
+        for m, u in rows
+    ]
 
     selected_user = None
     if user_id:
@@ -156,23 +177,41 @@ async def admin_messages(
     )
 
 
+# ---------------------------------------------------------------------------
+# Reply (text + optional file)
+# ---------------------------------------------------------------------------
+
 @router.post("/reply")
 async def send_reply(
     number: str = Form(...),
-    text: str = Form(...),
+    text: str = Form(""),
     user_id: str = Form(...),
+    file: Optional[UploadFile] = File(None),
     db: AsyncSession = Depends(get_db),
     _: str = Depends(require_auth),
 ):
     jid = number if "@" in number else f"{number}@s.whatsapp.net"
-    url = f"{EVOLUTION_API_URL}/message/sendText/{INSTANCE_NAME}"
-    headers = {"apikey": EVOLUTION_API_KEY, "Content-Type": "application/json"}
+    attachment_json: str | None = None
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        await client.post(url, json={"number": jid, "text": text}, headers=headers)
+    has_file = file and file.filename
 
-    msg = Message(user_id=user_id, message=text, direction="outbound", status="sent")
-    db.add(msg)
-    await db.commit()
+    if has_file:
+        file_bytes = await file.read()
+        mimetype = file.content_type or "application/octet-stream"
+        meta = save_upload(file_bytes, mimetype, file.filename)
+        await send_media(jid, file_bytes, mimetype, file.filename, caption=text)
+        attachment_json = json.dumps(meta)
+    elif text:
+        await send_text(jid, text)
+
+    if text or has_file:
+        db.add(Message(
+            user_id=user_id,
+            message=text or None,
+            attachment=attachment_json,
+            direction="outbound",
+            status="sent",
+        ))
+        await db.commit()
 
     return RedirectResponse(url=f"/messages?user_id={user_id}", status_code=303)

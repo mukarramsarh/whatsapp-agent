@@ -1,15 +1,20 @@
-import os
 import asyncio
+import json
 import logging
+import os
 from contextlib import asynccontextmanager
 
 import httpx
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
-from sqlalchemy import select
 
 from database import AsyncSessionLocal, Message, User, init_db
 from admin import router as admin_router
+from whatsapp import (
+    MEDIA_MESSAGE_KEYS,
+    download_and_save,
+    send_text,
+)
 
 load_dotenv()
 
@@ -19,6 +24,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger("bridge")
 
+from sqlalchemy import select
+
 EVOLUTION_API_URL = os.getenv("EVOLUTION_API_URL", "http://evolution-api:8080")
 EVOLUTION_API_KEY = os.getenv("EVOLUTION_API_KEY", "")
 INSTANCE_NAME = os.getenv("INSTANCE_NAME", "STC")
@@ -27,7 +34,7 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL", f"http://bridge:{BRIDGE_PORT}/webhook")
 
 
 # ---------------------------------------------------------------------------
-# Startup: register webhook with Evolution API
+# Startup
 # ---------------------------------------------------------------------------
 
 async def _register_webhook(retries: int = 10, delay: float = 8.0) -> None:
@@ -42,7 +49,6 @@ async def _register_webhook(retries: int = 10, delay: float = 8.0) -> None:
             "events": ["MESSAGES_UPSERT", "CONNECTION_UPDATE", "QRCODE_UPDATED"],
         }
     }
-
     for attempt in range(1, retries + 1):
         await asyncio.sleep(delay)
         try:
@@ -52,12 +58,11 @@ async def _register_webhook(retries: int = 10, delay: float = 8.0) -> None:
                 logger.info("Webhook registered: %s → %s", INSTANCE_NAME, WEBHOOK_URL)
                 return
             logger.warning(
-                "Webhook registration attempt %d/%d: HTTP %d — %s",
+                "Webhook registration %d/%d: HTTP %d — %s",
                 attempt, retries, r.status_code, r.text[:200],
             )
         except Exception as exc:
-            logger.warning("Webhook registration attempt %d/%d failed: %s", attempt, retries, exc)
-
+            logger.warning("Webhook registration %d/%d failed: %s", attempt, retries, exc)
     logger.error("Could not register webhook after %d attempts.", retries)
 
 
@@ -72,28 +77,8 @@ async def lifespan(app: FastAPI):
 # App
 # ---------------------------------------------------------------------------
 
-app = FastAPI(
-    title="WhatsApp Agent — Bridge",
-    version="0.2.0",
-    lifespan=lifespan,
-)
+app = FastAPI(title="WhatsApp Agent — Bridge", version="0.3.0", lifespan=lifespan)
 app.include_router(admin_router)
-
-
-# ---------------------------------------------------------------------------
-# Outbound helper
-# ---------------------------------------------------------------------------
-
-async def send_text(remote_jid: str, text: str) -> None:
-    url = f"{EVOLUTION_API_URL}/message/sendText/{INSTANCE_NAME}"
-    headers = {"apikey": EVOLUTION_API_KEY, "Content-Type": "application/json"}
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            r = await client.post(url, json={"number": remote_jid, "text": text}, headers=headers)
-            r.raise_for_status()
-        logger.info("Sent reply to %s", remote_jid)
-    except Exception as exc:
-        logger.error("Failed to send message to %s: %s", remote_jid, exc)
 
 
 # ---------------------------------------------------------------------------
@@ -107,36 +92,20 @@ def _extract_text(message: dict) -> str:
         or (message.get("imageMessage") or {}).get("caption")
         or (message.get("videoMessage") or {}).get("caption")
         or (message.get("documentMessage") or {}).get("caption")
+        or (message.get("documentWithCaptionMessage", {}).get("message", {}).get("documentMessage") or {}).get("caption")
         or ""
     )
 
 
-def _extract_attachment(message: dict) -> str | None:
-    for key, label in [
-        ("imageMessage", "image"),
-        ("videoMessage", "video"),
-        ("audioMessage", "audio"),
-        ("documentMessage", "document"),
-        ("stickerMessage", "sticker"),
-    ]:
-        if key in message:
-            mime = (message[key] or {}).get("mimetype", "")
-            return f"{label} ({mime})" if mime else label
-    return None
-
-
 async def _get_or_create_user(number: str, name: str | None) -> tuple[User, bool]:
-    """Return (user, is_new). Creates user with allowed=False if not found."""
     async with AsyncSessionLocal() as db:
         result = await db.execute(select(User).where(User.number == number))
         user = result.scalar_one_or_none()
         if user:
-            # Update name if we now have one and didn't before
             if name and not user.name:
                 user.name = name
                 await db.commit()
             return user, False
-
         user = User(number=number, name=name, allowed=False, status="active", role="user")
         db.add(user)
         await db.commit()
@@ -144,12 +113,14 @@ async def _get_or_create_user(number: str, name: str | None) -> tuple[User, bool
         return user, True
 
 
-async def _store_message(user_id: str, text: str, attachment: str | None) -> None:
+async def _store_message(
+    user_id: str, text: str, attachment_json: str | None
+) -> None:
     async with AsyncSessionLocal() as db:
         msg = Message(
             user_id=user_id,
             message=text or None,
-            attachment=attachment,
+            attachment=attachment_json,
             direction="inbound",
             status="received",
         )
@@ -164,11 +135,9 @@ async def process_webhook(payload: dict) -> None:
     if event == "connection.update":
         logger.info("Connection state: %s", (payload.get("data") or {}).get("state", ""))
         return
-
     if event == "qrcode.updated":
         logger.info("QR code updated — scan to connect.")
         return
-
     if event != "messages.upsert":
         return
 
@@ -179,39 +148,54 @@ async def process_webhook(payload: dict) -> None:
         return
 
     remote_jid: str = key.get("remoteJid", "")
-
-    # Skip groups
     if "@g.us" in remote_jid:
-        logger.debug("Skipping group message from %s", remote_jid)
         return
 
-    # Strip JID to plain number
     number = remote_jid.replace("@s.whatsapp.net", "").replace("@c.us", "")
     push_name: str | None = data.get("pushName") or None
     message: dict = data.get("message") or {}
-    text = _extract_text(message)
-    attachment = _extract_attachment(message)
+    message_type: str = data.get("messageType", "")
 
-    logger.info("Message from %s (%s): %s", push_name or number, remote_jid, text or "[media]")
+    text = _extract_text(message)
+    has_media = bool(any(k in message for k in MEDIA_MESSAGE_KEYS))
+
+    logger.info(
+        "Message from %s (%s): %s%s",
+        push_name or number,
+        remote_jid,
+        text or "",
+        " [+media]" if has_media else "",
+    )
 
     user, is_new = await _get_or_create_user(number, push_name)
-
     if is_new:
-        logger.info("New number %s auto-registered (allowed=False). Enable in /admin/users.", number)
+        logger.info("New number %s auto-registered (allowed=False).", number)
 
     if not user.allowed:
-        logger.info("Number %s is not allowed — ignoring.", number)
+        logger.info("Number %s not allowed — ignoring.", number)
         return
 
-    # Store inbound message
-    await _store_message(user.id, text, attachment)
+    # Download media if present
+    attachment_json: str | None = None
+    if has_media:
+        meta = await download_and_save(data)
+        if meta:
+            attachment_json = json.dumps(meta)
+        else:
+            # Fallback: note the type without file
+            attachment_json = json.dumps({
+                "path": None,
+                "name": message_type or "media",
+                "mime": "",
+                "size": 0,
+            })
 
-    if not text:
-        logger.info("Non-text message from %s — no auto-reply.", number)
-        return
+    await _store_message(user.id, text, attachment_json)
 
-    reply = f'Hi! I got your message: "{text}". I will reply to you soon.'
-    await send_text(remote_jid, reply)
+    # Phase 1 auto-reply (text messages only; skip if media-only)
+    if text:
+        reply = f'Hi! I got your message: "{text}". I will reply to you soon.'
+        await send_text(remote_jid, reply)
 
 
 # ---------------------------------------------------------------------------

@@ -2,7 +2,6 @@
 {% set active = "messages" %}
 
 {% block content %}
-<!-- Header -->
 <div class="flex items-center justify-between mb-6">
   <div>
     <h1 class="text-xl font-semibold text-slate-800">Messages</h1>
@@ -17,15 +16,14 @@
   <button onclick="openReply('{{ selected_user.number }}', '{{ selected_user.id }}')"
           class="flex items-center gap-1.5 bg-wa text-white text-sm font-medium px-4 py-2 rounded-lg hover:bg-wa-dark transition-colors">
     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-            d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"/>
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"/>
     </svg>
     Reply
   </button>
   {% endif %}
 </div>
 
-<!-- Filter bar -->
+<!-- Filter -->
 <div class="bg-white rounded-xl shadow-sm px-4 py-3 mb-4 flex items-center gap-3">
   <form method="get" class="flex items-center gap-3">
     <label class="text-xs text-slate-500 font-medium uppercase tracking-wide">Filter</label>
@@ -39,8 +37,7 @@
       {% endfor %}
     </select>
     {% if user_id %}
-    <a href="/messages"
-       class="text-sm text-slate-400 hover:text-slate-600 transition-colors">Clear</a>
+    <a href="/messages" class="text-sm text-slate-400 hover:text-slate-600 transition-colors">Clear</a>
     {% endif %}
   </form>
   {% if messages %}
@@ -48,7 +45,7 @@
   {% endif %}
 </div>
 
-<!-- Messages table -->
+<!-- Table -->
 <div class="bg-white rounded-xl shadow-sm overflow-hidden">
   <table class="w-full text-sm">
     <thead>
@@ -56,22 +53,26 @@
         <th class="text-left px-4 py-3">Time</th>
         <th class="text-left px-4 py-3">Number</th>
         <th class="text-left px-4 py-3">Dir</th>
-        <th class="text-left px-4 py-3">Message</th>
+        <th class="text-left px-4 py-3">Content</th>
         <th class="text-left px-4 py-3">Status</th>
         <th class="px-4 py-3"></th>
       </tr>
     </thead>
     <tbody class="divide-y divide-slate-100">
       {% for row in messages %}
+      {% set att = row.attachment %}
+      {% set is_image = att and att.mime and att.mime.startswith('image/') %}
+      {% set is_video = att and att.mime and att.mime.startswith('video/') %}
+      {% set is_audio = att and att.mime and att.mime.startswith('audio/') %}
+      {% set is_doc   = att and att.mime and not is_image and not is_video and not is_audio %}
+
       <tr class="hover:bg-slate-50 transition-colors {% if row.message.direction == 'outbound' %}bg-wa/5{% endif %}">
         <td class="px-4 py-3 text-slate-400 text-xs whitespace-nowrap">
           {{ row.message.created_at.strftime('%Y-%m-%d %H:%M') if row.message.created_at else '—' }}
         </td>
         <td class="px-4 py-3">
           <div class="font-semibold text-slate-700">+{{ row.user.number }}</div>
-          {% if row.user.name %}
-          <div class="text-xs text-slate-400">{{ row.user.name }}</div>
-          {% endif %}
+          {% if row.user.name %}<div class="text-xs text-slate-400">{{ row.user.name }}</div>{% endif %}
         </td>
         <td class="px-4 py-3">
           {% if row.message.direction == 'inbound' %}
@@ -90,18 +91,61 @@
           </span>
           {% endif %}
         </td>
+
+        <!-- Content cell -->
         <td class="px-4 py-3 max-w-sm">
-          <span class="text-slate-700 break-words whitespace-pre-wrap">{{ row.message.message or '—' }}</span>
-          {% if row.message.attachment %}
-          <div class="flex items-center gap-1 text-xs text-slate-400 mt-1">
+          <!-- Text / caption -->
+          {% if row.message.message %}
+          <p class="text-slate-700 break-words whitespace-pre-wrap mb-2">{{ row.message.message }}</p>
+          {% endif %}
+
+          <!-- Image -->
+          {% if is_image and att.path %}
+          <a href="/{{ att.path }}" target="_blank">
+            <img src="/{{ att.path }}" alt="{{ att.name }}"
+                 class="max-h-40 rounded-lg border border-slate-100 object-cover hover:opacity-90 transition-opacity">
+          </a>
+
+          <!-- Video -->
+          {% elif is_video and att.path %}
+          <video controls class="max-h-40 rounded-lg border border-slate-100 max-w-xs">
+            <source src="/{{ att.path }}" type="{{ att.mime }}">
+          </video>
+
+          <!-- Audio -->
+          {% elif is_audio and att.path %}
+          <audio controls class="w-full max-w-xs mt-1">
+            <source src="/{{ att.path }}" type="{{ att.mime }}">
+          </audio>
+
+          <!-- Document / other -->
+          {% elif att and att.path %}
+          <a href="/{{ att.path }}" download="{{ att.name }}"
+             class="inline-flex items-center gap-2 px-3 py-2 bg-slate-100 hover:bg-slate-200 rounded-lg text-xs text-slate-700 transition-colors">
+            <svg class="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                    d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+            </svg>
+            <span class="truncate max-w-[200px]">{{ att.name }}</span>
+            {% if att.size %}<span class="text-slate-400 shrink-0">{{ (att.size / 1024) | int }}KB</span>{% endif %}
+          </a>
+
+          <!-- Media noted but not downloaded -->
+          {% elif att and not att.path %}
+          <span class="inline-flex items-center gap-1 text-xs text-slate-400">
             <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                     d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/>
             </svg>
-            {{ row.message.attachment }}
-          </div>
+            {{ att.name }}
+          </span>
+          {% endif %}
+
+          {% if not row.message.message and not att %}
+          <span class="text-slate-400">—</span>
           {% endif %}
         </td>
+
         <td class="px-4 py-3">
           <span class="inline-block px-2 py-0.5 bg-slate-100 text-slate-500 text-xs rounded">
             {{ row.message.status }}
@@ -138,11 +182,10 @@
 <div id="replyModal" class="hidden fixed inset-0 z-50 flex items-center justify-center">
   <div class="absolute inset-0 bg-black/40 backdrop-blur-sm" onclick="closeModal()"></div>
   <div class="relative bg-white rounded-2xl shadow-xl w-full max-w-md mx-4">
-    <form action="/reply" method="post">
+    <form action="/reply" method="post" enctype="multipart/form-data">
       <div class="flex items-center justify-between px-6 pt-5 pb-4 border-b border-slate-100">
         <h2 class="font-semibold text-slate-800">Send Reply</h2>
-        <button type="button" onclick="closeModal()"
-                class="text-slate-400 hover:text-slate-600 transition-colors">
+        <button type="button" onclick="closeModal()" class="text-slate-400 hover:text-slate-600 transition-colors">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
           </svg>
@@ -150,30 +193,51 @@
       </div>
 
       <div class="px-6 py-5 space-y-4">
+        <!-- To -->
         <div>
           <label class="block text-sm font-medium text-slate-700 mb-1">To</label>
           <input type="text" id="replyNumber" name="number" readonly
                  class="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-600 outline-none">
           <input type="hidden" id="replyUserId" name="user_id">
         </div>
+
+        <!-- Message text -->
         <div>
-          <label class="block text-sm font-medium text-slate-700 mb-1">Message</label>
-          <textarea id="replyText" name="text" rows="4" required
+          <label class="block text-sm font-medium text-slate-700 mb-1">Message <span class="text-slate-400 font-normal">(optional if sending a file)</span></label>
+          <textarea id="replyText" name="text" rows="3"
                     placeholder="Type your message…"
                     class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-wa focus:border-wa resize-none"></textarea>
+        </div>
+
+        <!-- File attachment -->
+        <div>
+          <label class="block text-sm font-medium text-slate-700 mb-1">Attachment <span class="text-slate-400 font-normal">(optional)</span></label>
+          <label id="fileLabel"
+                 class="flex items-center gap-2 border border-dashed border-slate-300 rounded-lg px-3 py-3 cursor-pointer hover:border-wa hover:bg-wa/5 transition-colors">
+            <svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                    d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/>
+            </svg>
+            <span id="fileLabelText" class="text-sm text-slate-500">Click to choose image, video, audio or document</span>
+            <input type="file" name="file" id="fileInput" class="sr-only"
+                   accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.txt">
+          </label>
+        </div>
+
+        <!-- File preview -->
+        <div id="filePreview" class="hidden">
+          <img id="previewImg" class="max-h-32 rounded-lg border border-slate-100 object-cover" src="" alt="">
+          <p id="previewName" class="text-xs text-slate-500 mt-1 truncate"></p>
         </div>
       </div>
 
       <div class="flex justify-end gap-2 px-6 pb-5">
         <button type="button" onclick="closeModal()"
-                class="px-4 py-2 text-sm text-slate-600 hover:text-slate-800 transition-colors">
-          Cancel
-        </button>
+                class="px-4 py-2 text-sm text-slate-600 hover:text-slate-800 transition-colors">Cancel</button>
         <button type="submit"
                 class="flex items-center gap-1.5 px-4 py-2 bg-wa text-white text-sm font-medium rounded-lg hover:bg-wa-dark transition-colors">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                  d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
           </svg>
           Send
         </button>
@@ -189,6 +253,7 @@
     document.getElementById('replyNumber').value = '+' + number;
     document.getElementById('replyUserId').value = userId;
     document.getElementById('replyText').value = '';
+    clearFilePreview();
     document.getElementById('replyModal').classList.remove('hidden');
     document.getElementById('replyText').focus();
   }
@@ -196,5 +261,34 @@
     document.getElementById('replyModal').classList.add('hidden');
   }
   document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+
+  // File preview
+  document.getElementById('fileInput').addEventListener('change', function () {
+    const file = this.files[0];
+    if (!file) { clearFilePreview(); return; }
+
+    document.getElementById('fileLabelText').textContent = file.name;
+    document.getElementById('previewName').textContent =
+      file.name + ' (' + (file.size / 1024).toFixed(1) + ' KB)';
+
+    if (file.type.startsWith('image/')) {
+      const reader = new FileReader();
+      reader.onload = e => {
+        document.getElementById('previewImg').src = e.target.result;
+        document.getElementById('previewImg').classList.remove('hidden');
+      };
+      reader.readAsDataURL(file);
+    } else {
+      document.getElementById('previewImg').classList.add('hidden');
+    }
+    document.getElementById('filePreview').classList.remove('hidden');
+  });
+
+  function clearFilePreview() {
+    document.getElementById('fileInput').value = '';
+    document.getElementById('fileLabelText').textContent = 'Click to choose image, video, audio or document';
+    document.getElementById('filePreview').classList.add('hidden');
+    document.getElementById('previewImg').src = '';
+  }
 </script>
 {% endblock %}
