@@ -1,8 +1,25 @@
+# Core framework
 fastapi==0.111.1
 uvicorn[standard]==0.30.3
 httpx==0.27.0
 python-dotenv==1.0.1
+python-multipart==0.0.9
+
+# Database
 sqlalchemy[asyncio]==2.0.31
 asyncpg==0.29.0
+
+# Templates
 jinja2==3.1.4
-python-multipart==0.0.9
+
+# AI — OpenAI-compatible client (works with any self-hosted model via vLLM / Ollama)
+openai==1.35.0
+
+# Voice — STT
+faster-whisper==1.0.3
+
+# Voice — TTS (Microsoft neural voices, Arabic + English)
+edge-tts==6.1.12
+
+# SSH tool
+asyncssh==2.14.2

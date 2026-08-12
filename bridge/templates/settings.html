@@ -1,0 +1,282 @@
+{% extends "base.html" %}
+{% set active = "settings" %}
+
+{% block content %}
+<div class="flex items-center justify-between mb-6">
+  <div>
+    <h1 class="text-xl font-semibold text-slate-800">Settings</h1>
+    <p class="text-sm text-slate-500 mt-0.5">Configure the AI agent, context window, voice, and more</p>
+  </div>
+  {% if request.query_params.get('saved') %}
+  <span class="flex items-center gap-1.5 px-3 py-1.5 bg-green-100 text-green-700 text-sm font-medium rounded-lg">
+    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+    </svg>
+    Saved
+  </span>
+  {% endif %}
+</div>
+
+<!-- Tab nav -->
+<div class="flex gap-1 bg-white rounded-xl shadow-sm p-1 mb-6 overflow-x-auto">
+  {% for tab_id, tab_label, tab_icon in [
+    ('ai','AI Integration','M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z'),
+    ('context','Context Window','M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10'),
+    ('confidence','Confidence','M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z'),
+    ('voice','Voice','M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z'),
+    ('roles','User Roles','M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z'),
+  ] %}
+  <button onclick="showTab('{{ tab_id }}')" id="tab-btn-{{ tab_id }}"
+          class="tab-btn flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-lg transition-colors whitespace-nowrap text-slate-500 hover:text-slate-700">
+    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="{{ tab_icon }}"/>
+    </svg>
+    {{ tab_label }}
+  </button>
+  {% endfor %}
+</div>
+
+<!-- ── AI Integration ── -->
+<div id="tab-ai" class="tab-panel hidden">
+  <form action="/settings/save" method="post">
+    <div class="bg-white rounded-xl shadow-sm p-6 space-y-5">
+      <h2 class="font-semibold text-slate-700 border-b pb-3">AI / LLM Integration</h2>
+
+      {% for key, label, type, placeholder in [
+        ('ai_base_url',      'LLM Base URL',          'text',     'http://192.168.100.62:8000/v1'),
+        ('ai_model',         'Model Name',             'text',     'gpt-4o-mini or your model id'),
+        ('ai_api_key',       'API Key',                'password', 'your-api-key'),
+        ('ai_embedding_url', 'Embedding Base URL',     'text',     'http://192.168.100.62:8000/v1 (leave empty to disable)'),
+        ('ai_embedding_model','Embedding Model Name',  'text',     'text-embedding-3-small'),
+        ('agent_max_iterations','Max ReAct Iterations','number',   '10'),
+      ] %}
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">{{ label }}</label>
+        {% if settings.get(key) %}
+        <input type="{{ type }}" name="{{ key }}"
+               value="{% if type != 'password' %}{{ settings[key].value }}{% endif %}"
+               placeholder="{{ placeholder }}"
+               class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-wa focus:border-wa font-mono">
+        <p class="text-xs text-slate-400 mt-0.5">{{ settings[key].description or '' }}</p>
+        {% endif %}
+      </div>
+      {% endfor %}
+
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Master System Prompt</label>
+        <textarea name="master_prompt" rows="8"
+                  class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-wa focus:border-wa font-mono resize-y"
+                  placeholder="You are a helpful AI assistant...">{{ settings.get('master_prompt', {}).value if settings.get('master_prompt') else '' }}</textarea>
+        <p class="text-xs text-slate-400 mt-0.5">Core system prompt injected at the start of every conversation.</p>
+      </div>
+    </div>
+    <div class="flex justify-end mt-4">
+      <button type="submit" class="px-5 py-2 bg-wa text-white text-sm font-medium rounded-lg hover:bg-wa-dark transition-colors">Save AI Settings</button>
+    </div>
+  </form>
+</div>
+
+<!-- ── Context Window ── -->
+<div id="tab-context" class="tab-panel hidden">
+  <form action="/settings/save" method="post">
+    <div class="bg-white rounded-xl shadow-sm p-6 space-y-5">
+      <h2 class="font-semibold text-slate-700 border-b pb-3">Context Window Configuration</h2>
+      <p class="text-sm text-slate-500">Configure how much conversation history is passed to the AI on each request.</p>
+
+      {% for key, label, min, max, desc in [
+        ('context_recent_count', 'Recent Messages',          1, 100, 'Latest N messages always included as context'),
+        ('context_old_count',    'Historical Fetch Limit',   1, 20,  'Max historical messages retrieved via vector search'),
+        ('context_vector_count', 'Vector Search Results',    0, 20,  'Semantically similar past messages to include (0 = disabled)'),
+      ] %}
+      <div>
+        <label class="flex justify-between text-sm font-medium text-slate-700 mb-1">
+          {{ label }}
+          <span class="text-slate-400 font-normal text-xs">{{ desc }}</span>
+        </label>
+        <div class="flex items-center gap-3">
+          <input type="range" name="{{ key }}"
+                 min="{{ min }}" max="{{ max }}"
+                 value="{{ settings.get(key, {}).value if settings.get(key) else min }}"
+                 oninput="document.getElementById('val-{{ key }}').textContent=this.value"
+                 class="flex-1 accent-wa">
+          <span id="val-{{ key }}" class="w-8 text-center text-sm font-semibold text-slate-700">
+            {{ settings.get(key, {}).value if settings.get(key) else min }}
+          </span>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="flex justify-end mt-4">
+      <button type="submit" class="px-5 py-2 bg-wa text-white text-sm font-medium rounded-lg hover:bg-wa-dark transition-colors">Save Context Settings</button>
+    </div>
+  </form>
+</div>
+
+<!-- ── Confidence ── -->
+<div id="tab-confidence" class="tab-panel hidden">
+  <form action="/settings/save" method="post">
+    <div class="bg-white rounded-xl shadow-sm p-6 space-y-6">
+      <h2 class="font-semibold text-slate-700 border-b pb-3">Confidence Layer</h2>
+      <p class="text-sm text-slate-500">When enabled, the AI scores its own response before sending. If the score is below the threshold, it retries automatically.</p>
+
+      <!-- Enable toggle -->
+      <div class="flex items-center justify-between">
+        <div>
+          <p class="text-sm font-medium text-slate-700">Enable Confidence Scoring</p>
+          <p class="text-xs text-slate-400">AI evaluates and retries low-quality responses</p>
+        </div>
+        {% set conf_enabled = settings.get('confidence_enabled', {}).value == 'true' if settings.get('confidence_enabled') else false %}
+        <label class="relative inline-flex items-center cursor-pointer">
+          <input type="checkbox" name="confidence_enabled" value="true"
+                 {% if conf_enabled %}checked{% endif %}
+                 onchange="document.getElementById('confidence_hidden').value = this.checked ? 'true' : 'false'"
+                 class="sr-only peer">
+          <input type="hidden" id="confidence_hidden" name="confidence_enabled"
+                 value="{{ 'true' if conf_enabled else 'false' }}">
+          <div class="w-11 h-6 bg-slate-200 peer-focus:ring-2 peer-focus:ring-wa rounded-full peer peer-checked:bg-wa transition-colors after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-5"></div>
+        </label>
+      </div>
+
+      <!-- Threshold slider -->
+      <div>
+        <label class="flex justify-between text-sm font-medium text-slate-700 mb-1">
+          Confidence Threshold
+          <span class="text-slate-400 font-normal text-xs">Retry if score is below this value</span>
+        </label>
+        <div class="flex items-center gap-3">
+          <input type="range" name="confidence_threshold" min="0.1" max="1.0" step="0.05"
+                 value="{{ settings.get('confidence_threshold', {}).value if settings.get('confidence_threshold') else '0.7' }}"
+                 oninput="document.getElementById('val-conf-thresh').textContent=parseFloat(this.value).toFixed(2)"
+                 class="flex-1 accent-wa">
+          <span id="val-conf-thresh" class="w-10 text-center text-sm font-semibold text-slate-700">
+            {{ settings.get('confidence_threshold', {}).value if settings.get('confidence_threshold') else '0.70' }}
+          </span>
+        </div>
+      </div>
+
+      <!-- Max retries -->
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Max Retries</label>
+        <input type="number" name="confidence_max_retries" min="1" max="5"
+               value="{{ settings.get('confidence_max_retries', {}).value if settings.get('confidence_max_retries') else '2' }}"
+               class="w-24 border border-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-wa focus:border-wa">
+      </div>
+    </div>
+    <div class="flex justify-end mt-4">
+      <button type="submit" class="px-5 py-2 bg-wa text-white text-sm font-medium rounded-lg hover:bg-wa-dark transition-colors">Save Confidence Settings</button>
+    </div>
+  </form>
+</div>
+
+<!-- ── Voice ── -->
+<div id="tab-voice" class="tab-panel hidden">
+  <form action="/settings/save" method="post">
+    <div class="bg-white rounded-xl shadow-sm p-6 space-y-6">
+      <h2 class="font-semibold text-slate-700 border-b pb-3">Voice — STT &amp; TTS</h2>
+      <p class="text-sm text-slate-500">Requires <code class="bg-slate-100 px-1 rounded">faster-whisper</code> (STT) and <code class="bg-slate-100 px-1 rounded">edge-tts</code> (TTS) installed in the bridge container.</p>
+
+      <!-- Enable toggle -->
+      <div class="flex items-center justify-between">
+        <div>
+          <p class="text-sm font-medium text-slate-700">Enable Voice Support</p>
+          <p class="text-xs text-slate-400">Transcribe voice messages and reply with audio</p>
+        </div>
+        {% set voice_enabled = settings.get('voice_enabled', {}).value == 'true' if settings.get('voice_enabled') else false %}
+        <label class="relative inline-flex items-center cursor-pointer">
+          <input type="checkbox" name="voice_enabled" value="true"
+                 {% if voice_enabled %}checked{% endif %}
+                 onchange="document.getElementById('voice_hidden').value = this.checked ? 'true' : 'false'"
+                 class="sr-only peer">
+          <input type="hidden" id="voice_hidden" name="voice_enabled"
+                 value="{{ 'true' if voice_enabled else 'false' }}">
+          <div class="w-11 h-6 bg-slate-200 peer-focus:ring-2 peer-focus:ring-wa rounded-full peer peer-checked:bg-wa transition-colors after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-5"></div>
+        </label>
+      </div>
+
+      {% for key, label, opts in [
+        ('voice_stt_model', 'Whisper STT Model', ['tiny','base','small','medium','large']),
+      ] %}
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">{{ label }}</label>
+        <select name="{{ key }}" class="border border-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-wa focus:border-wa">
+          {% set current = settings.get(key, {}).value if settings.get(key) else opts[0] %}
+          {% for opt in opts %}
+          <option value="{{ opt }}" {% if opt == current %}selected{% endif %}>{{ opt }}</option>
+          {% endfor %}
+        </select>
+        <p class="text-xs text-slate-400 mt-0.5">Larger = more accurate, slower, more RAM. <code class="bg-slate-100 px-1 rounded">base</code> is a good balance.</p>
+      </div>
+      {% endfor %}
+
+      {% for key, label, placeholder in [
+        ('voice_tts_voice_en', 'English TTS Voice (edge-tts)', 'en-US-JennyNeural'),
+        ('voice_tts_voice_ar', 'Arabic TTS Voice (edge-tts)',  'ar-SA-HamedNeural'),
+      ] %}
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">{{ label }}</label>
+        <input type="text" name="{{ key }}"
+               value="{{ settings.get(key, {}).value if settings.get(key) else placeholder }}"
+               placeholder="{{ placeholder }}"
+               class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-wa focus:border-wa font-mono">
+      </div>
+      {% endfor %}
+    </div>
+    <div class="flex justify-end mt-4">
+      <button type="submit" class="px-5 py-2 bg-wa text-white text-sm font-medium rounded-lg hover:bg-wa-dark transition-colors">Save Voice Settings</button>
+    </div>
+  </form>
+</div>
+
+<!-- ── User Roles ── -->
+<div id="tab-roles" class="tab-panel hidden">
+  <div class="space-y-4" id="roles">
+    {% for role in roles %}
+    <div class="bg-white rounded-xl shadow-sm p-6">
+      <form action="/settings/roles/{{ role.name }}" method="post">
+        <div class="flex items-center justify-between mb-4">
+          <div>
+            <h3 class="font-semibold text-slate-800">{{ role.display_name }}</h3>
+            <code class="text-xs text-slate-400">role: {{ role.name }}</code>
+          </div>
+          <button type="submit"
+                  class="px-4 py-1.5 bg-wa text-white text-xs font-medium rounded-lg hover:bg-wa-dark transition-colors">
+            Save
+          </button>
+        </div>
+        <input type="hidden" name="display_name" value="{{ role.display_name }}">
+        <label class="block text-sm font-medium text-slate-700 mb-1">Role System Prompt</label>
+        <textarea name="system_prompt" rows="4"
+                  class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-wa focus:border-wa font-mono resize-y"
+                  placeholder="Instructions specific to this role…">{{ role.system_prompt or '' }}</textarea>
+        <p class="text-xs text-slate-400 mt-1">Added after the master prompt for users with this role.</p>
+      </form>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const TABS = ['ai','context','confidence','voice','roles'];
+
+  function showTab(id) {
+    TABS.forEach(t => {
+      document.getElementById('tab-' + t).classList.add('hidden');
+      const btn = document.getElementById('tab-btn-' + t);
+      btn.classList.remove('bg-wa/10','text-wa-dark','font-semibold');
+      btn.classList.add('text-slate-500');
+    });
+    document.getElementById('tab-' + id).classList.remove('hidden');
+    const btn = document.getElementById('tab-btn-' + id);
+    btn.classList.add('bg-wa/10','text-wa-dark','font-semibold');
+    btn.classList.remove('text-slate-500');
+    location.hash = id;
+  }
+
+  // On load: pick tab from hash or default to 'ai'
+  const initial = (location.hash || '#ai').replace('#','');
+  showTab(TABS.includes(initial) ? initial : 'ai');
+</script>
+{% endblock %}

@@ -7,16 +7,15 @@ from contextlib import asynccontextmanager
 import httpx
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from sqlalchemy import select
 
-from database import AsyncSessionLocal, Message, User, init_db
+from database import AsyncSessionLocal, Message, Setting, ToolConfig, UserRole, User, init_db
 from admin import router as admin_router
-from whatsapp import (
-    MEDIA_DIR,
-    MEDIA_MESSAGE_KEYS,
-    download_and_save,
-    send_text,
-)
-import ocr
+from whatsapp import MEDIA_DIR, MEDIA_MESSAGE_KEYS, download_and_save, send_media, send_text
+from agent.tools import ALL_TOOL_CLASSES
+import agent.context as ctx_builder
+import agent.language as lang_module
+import voice as voice_module
 
 load_dotenv()
 
@@ -25,8 +24,6 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
 )
 logger = logging.getLogger("bridge")
-
-from sqlalchemy import select
 
 EVOLUTION_API_URL = os.getenv("EVOLUTION_API_URL", "http://evolution-api:8080")
 EVOLUTION_API_KEY = os.getenv("EVOLUTION_API_KEY", "")
@@ -59,12 +56,9 @@ async def _register_webhook(retries: int = 10, delay: float = 8.0) -> None:
             if r.status_code in (200, 201):
                 logger.info("Webhook registered: %s → %s", INSTANCE_NAME, WEBHOOK_URL)
                 return
-            logger.warning(
-                "Webhook registration %d/%d: HTTP %d — %s",
-                attempt, retries, r.status_code, r.text[:200],
-            )
+            logger.warning("Webhook %d/%d: HTTP %d — %s", attempt, retries, r.status_code, r.text[:200])
         except Exception as exc:
-            logger.warning("Webhook registration %d/%d failed: %s", attempt, retries, exc)
+            logger.warning("Webhook %d/%d failed: %s", attempt, retries, exc)
     logger.error("Could not register webhook after %d attempts.", retries)
 
 
@@ -79,12 +73,12 @@ async def lifespan(app: FastAPI):
 # App
 # ---------------------------------------------------------------------------
 
-app = FastAPI(title="WhatsApp Agent — Bridge", version="0.3.0", lifespan=lifespan)
+app = FastAPI(title="WhatsApp AI Agent — Bridge", version="2.0.0", lifespan=lifespan)
 app.include_router(admin_router)
 
 
 # ---------------------------------------------------------------------------
-# Message processing
+# Helpers
 # ---------------------------------------------------------------------------
 
 def _extract_text(message: dict) -> str:
@@ -94,15 +88,44 @@ def _extract_text(message: dict) -> str:
         or (message.get("imageMessage") or {}).get("caption")
         or (message.get("videoMessage") or {}).get("caption")
         or (message.get("documentMessage") or {}).get("caption")
-        or (message.get("documentWithCaptionMessage", {}).get("message", {}).get("documentMessage") or {}).get("caption")
+        or (
+            (message.get("documentWithCaptionMessage", {}).get("message", {}).get("documentMessage") or {})
+            .get("caption")
+        )
         or ""
     )
 
 
+async def _load_settings() -> dict:
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(Setting))
+        return {s.key: s.value for s in result.scalars().all()}
+
+
+async def _load_tools(settings: dict) -> list:
+    """Instantiate enabled tools with their configs."""
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(ToolConfig).where(ToolConfig.enabled == True))
+        configs = {tc.name: json.loads(tc.config or "{}") for tc in result.scalars().all()}
+
+    tools = []
+    for cls in ALL_TOOL_CLASSES:
+        if cls.name in configs:
+            tools.append(cls(config=configs[cls.name]))
+    return tools
+
+
+async def _get_role_prompt(role_name: str) -> str:
+    async with AsyncSessionLocal() as db:
+        r = await db.execute(select(UserRole).where(UserRole.name == role_name))
+        role = r.scalar_one_or_none()
+        return role.system_prompt or "" if role else ""
+
+
 async def _get_or_create_user(number: str, name: str | None) -> tuple[User, bool]:
     async with AsyncSessionLocal() as db:
-        result = await db.execute(select(User).where(User.number == number))
-        user = result.scalar_one_or_none()
+        r = await db.execute(select(User).where(User.number == number))
+        user = r.scalar_one_or_none()
         if user:
             if name and not user.name:
                 user.name = name
@@ -116,15 +139,19 @@ async def _get_or_create_user(number: str, name: str | None) -> tuple[User, bool
 
 
 async def _store_message(
-    user_id: str, text: str, attachment_json: str | None
+    user_id: str,
+    text: str | None,
+    attachment_json: str | None,
+    direction: str = "inbound",
+    status: str = "received",
 ) -> str:
     async with AsyncSessionLocal() as db:
         msg = Message(
             user_id=user_id,
             message=text or None,
             attachment=attachment_json,
-            direction="inbound",
-            status="received",
+            direction=direction,
+            status=status,
         )
         db.add(msg)
         await db.commit()
@@ -134,49 +161,89 @@ async def _store_message(
 
 async def _update_attachment(msg_id: str, attachment_json: str) -> None:
     async with AsyncSessionLocal() as db:
-        result = await db.execute(select(Message).where(Message.id == msg_id))
-        msg = result.scalar_one_or_none()
+        r = await db.execute(select(Message).where(Message.id == msg_id))
+        msg = r.scalar_one_or_none()
         if msg:
             msg.attachment = attachment_json
             await db.commit()
 
 
-async def _run_ocr(msg_id: str, jid: str, meta: dict) -> None:
-    """Background task: OCR a media file, update DB, reply to user."""
-    rel_path = meta.get("path", "")
-    if not rel_path:
-        return
-
-    filename_part = rel_path.split("/", 1)[-1]
-    file_path = MEDIA_DIR / filename_part
-    if not file_path.exists():
-        logger.warning("OCR: file not found: %s", file_path)
-        return
-
+async def _embed_message(msg_id: str, content: str, number: str, direction: str = "inbound") -> None:
     try:
-        file_bytes = file_path.read_bytes()
+        import embeddings
+        await embeddings.store_message_embedding(msg_id, content, number, direction)
     except Exception as exc:
-        logger.error("OCR: cannot read %s: %s", file_path, exc)
-        return
+        logger.debug("Embedding skipped: %s", exc)
 
-    filename = meta.get("name") or file_path.name
-    logger.info("OCR: processing %s (%d bytes)", filename, len(file_bytes))
 
-    extracted = await ocr.submit_and_wait(file_bytes, filename)
+# ---------------------------------------------------------------------------
+# Core agent pipeline
+# ---------------------------------------------------------------------------
 
-    if extracted:
-        meta["ocr_text"] = extracted
-        await _update_attachment(msg_id, json.dumps(meta))
-        logger.info("OCR: extracted %d chars from %s", len(extracted), filename)
-        await send_text(jid, f"Extracted text from your file:\n\n{extracted}")
+async def _run_agent_pipeline(
+    user_message: str,
+    number: str,
+    user: User,
+    remote_jid: str,
+    attachment_meta: dict | None,
+    is_voice: bool,
+) -> None:
+    """Full ReAct pipeline: context → agent → confidence → reply."""
+    from agent.runner import AgentRunner
+
+    settings = await _load_settings()
+    tools = await _load_tools(settings)
+    role_prompt = await _get_role_prompt(user.role)
+    language = lang_module.detect(user_message)
+
+    context_msgs = await ctx_builder.build(
+        number=number,
+        query=user_message,
+        recent_count=int(settings.get("context_recent_count", "20")),
+        old_count=int(settings.get("context_old_count", "5")),
+        vector_count=int(settings.get("context_vector_count", "5")),
+    )
+
+    runner = AgentRunner(settings=settings, tools=tools)
+    result = await runner.run(
+        user_message=user_message,
+        context_messages=context_msgs,
+        role_prompt=role_prompt,
+        language=language,
+        attachment_meta=attachment_meta,
+    )
+
+    reply_text = result.content
+    logger.info(
+        "Agent replied (%s, conf=%.2f, tools=%s, iters=%d): %d chars",
+        language, result.confidence,
+        result.tool_calls_made or "none",
+        result.iterations,
+        len(reply_text),
+    )
+
+    # Deliver reply: voice or text
+    voice_enabled = settings.get("voice_enabled", "false").lower() == "true"
+    if is_voice and voice_enabled:
+        audio = await voice_module.synthesize(reply_text, language)
+        if audio:
+            await send_media(remote_jid, audio, "audio/mpeg", "reply.mp3")
+        else:
+            await send_text(remote_jid, reply_text)
     else:
-        logger.warning("OCR: no text extracted from %s", filename)
-        await send_text(jid, "I received your file but could not extract any text from it.")
+        await send_text(remote_jid, reply_text)
 
+    # Persist outbound message
+    out_id = await _store_message(user.id, reply_text, None, "outbound", "sent")
+    asyncio.create_task(_embed_message(out_id, reply_text, number, "outbound"))
+
+
+# ---------------------------------------------------------------------------
+# Webhook processor
+# ---------------------------------------------------------------------------
 
 async def process_webhook(payload: dict) -> None:
     event: str = payload.get("event", "")
-    logger.debug("Event: %s", event)
 
     if event == "connection.update":
         logger.info("Connection state: %s", (payload.get("data") or {}).get("state", ""))
@@ -195,7 +262,7 @@ async def process_webhook(payload: dict) -> None:
 
     remote_jid: str = key.get("remoteJid", "")
     if "@g.us" in remote_jid:
-        return
+        return  # ignore groups
 
     number = remote_jid.replace("@s.whatsapp.net", "").replace("@c.us", "")
     push_name: str | None = data.get("pushName") or None
@@ -203,13 +270,13 @@ async def process_webhook(payload: dict) -> None:
     message_type: str = data.get("messageType", "")
 
     text = _extract_text(message)
-    has_media = bool(any(k in message for k in MEDIA_MESSAGE_KEYS))
+    has_media = any(k in message for k in MEDIA_MESSAGE_KEYS)
+    is_audio = "audioMessage" in message
 
     logger.info(
-        "Message from %s (%s): %s%s",
-        push_name or number,
-        remote_jid,
-        text or "",
+        "Inbound from %s (%s)%s%s",
+        push_name or number, remote_jid,
+        f": {text}" if text else "",
         " [+media]" if has_media else "",
     )
 
@@ -221,33 +288,52 @@ async def process_webhook(payload: dict) -> None:
         logger.info("Number %s not allowed — ignoring.", number)
         return
 
-    # Download media if present
+    # --- Download media ---
+    attachment_meta: dict | None = None
     attachment_json: str | None = None
     if has_media:
         meta = await download_and_save(data)
         if meta:
+            attachment_meta = meta
             attachment_json = json.dumps(meta)
         else:
-            # Fallback: note the type without file
-            attachment_json = json.dumps({
-                "path": None,
-                "name": message_type or "media",
-                "mime": "",
-                "size": 0,
-            })
+            attachment_json = json.dumps({"path": None, "name": message_type or "media", "mime": "", "size": 0})
 
+    # --- Voice transcription ---
+    is_voice = False
+    if is_audio and attachment_meta and attachment_meta.get("path"):
+        settings_check = await _load_settings()
+        if settings_check.get("voice_enabled", "false").lower() == "true":
+            audio_file = MEDIA_DIR / attachment_meta["path"].split("/", 1)[-1]
+            transcript = await voice_module.transcribe(audio_file)
+            if transcript:
+                text = transcript
+                is_voice = True
+                logger.info("Voice transcribed: %s", text[:100])
+            attachment_meta["transcript"] = transcript or ""
+            attachment_json = json.dumps(attachment_meta)
+
+    # --- Store inbound message ---
     msg_id = await _store_message(user.id, text, attachment_json)
 
-    # Auto-reply: OCR for images/PDFs, echo for plain text
-    if attachment_json:
-        meta = json.loads(attachment_json)
-        if ocr.is_ocreable(meta.get("mime", "")):
-            asyncio.create_task(_run_ocr(msg_id, remote_jid, meta))
-            return
-
+    # --- Embed inbound message (background) ---
     if text:
-        reply = f'Hi! I got your message: "{text}". I will reply to you soon.'
-        await send_text(remote_jid, reply)
+        asyncio.create_task(_embed_message(msg_id, text, number, "inbound"))
+
+    # --- Skip agent if no usable content ---
+    if not text and not attachment_meta:
+        logger.info("No text or media — nothing to process.")
+        return
+
+    # --- Run agent pipeline ---
+    await _run_agent_pipeline(
+        user_message=text,
+        number=number,
+        user=user,
+        remote_jid=remote_jid,
+        attachment_meta=attachment_meta,
+        is_voice=is_voice,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -266,4 +352,4 @@ async def webhook(request: Request, background_tasks: BackgroundTasks):
 
 @app.get("/health")
 async def health():
-    return {"status": "healthy", "instance": INSTANCE_NAME, "bridge": "phase-1"}
+    return {"status": "healthy", "instance": INSTANCE_NAME, "bridge": "phase-2"}
