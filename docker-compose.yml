@@ -115,10 +115,29 @@ services:
       - evolution-api
     restart: unless-stopped
 
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    ports:
+      - "5022:80"
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@admin.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD}
+      PGADMIN_CONFIG_SERVER_MODE: "True"
+      PGADMIN_CONFIG_ENHANCED_COOKIE_PROTECTION: "True"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    networks:
+      - wa-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   postgres_data:
   redis_data:
   evolution_instances:
+  pgadmin_data:
 
 networks:
   wa-network:
