@@ -2,15 +2,25 @@ import os
 import uuid
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, func
+from sqlalchemy.engine import URL
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql+asyncpg://postgres:postgres@postgres:5432/evolution",
-)
 
-engine = create_async_engine(DATABASE_URL, echo=False, pool_pre_ping=True)
+def _db_url() -> URL:
+    """Build the connection URL from individual env vars so special characters
+    in the password (e.g. @, #) are escaped correctly by SQLAlchemy."""
+    return URL.create(
+        drivername="postgresql+asyncpg",
+        username=os.getenv("POSTGRES_USER", "postgres"),
+        password=os.getenv("POSTGRES_PASSWORD", ""),
+        host=os.getenv("POSTGRES_HOST", "postgres"),
+        port=int(os.getenv("POSTGRES_PORT", "5432")),
+        database=os.getenv("POSTGRES_DB", "evolution"),
+    )
+
+
+engine = create_async_engine(_db_url(), echo=False, pool_pre_ping=True)
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
 

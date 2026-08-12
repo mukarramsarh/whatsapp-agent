@@ -20,7 +20,7 @@ INSTANCE_NAME = os.getenv("INSTANCE_NAME", "STC")
 
 security = HTTPBasic()
 templates = Jinja2Templates(directory="templates")
-router = APIRouter(prefix="/admin")
+router = APIRouter()
 
 
 def require_auth(credentials: HTTPBasicCredentials = Depends(security)) -> str:
@@ -44,12 +44,12 @@ async def get_db():
 
 
 # ---------------------------------------------------------------------------
-# Root
+# Root → Users
 # ---------------------------------------------------------------------------
 
 @router.get("/", response_class=RedirectResponse)
-async def admin_root(_: str = Depends(require_auth)):
-    return RedirectResponse(url="/admin/users")
+async def root(_: str = Depends(require_auth)):
+    return RedirectResponse(url="/users")
 
 
 # ---------------------------------------------------------------------------
@@ -81,12 +81,12 @@ async def add_user(
     number = number.strip().lstrip("+").replace(" ", "").replace("-", "")
     existing = await db.execute(select(User).where(User.number == number))
     if existing.scalar_one_or_none():
-        return RedirectResponse(url="/admin/users?error=exists", status_code=303)
+        return RedirectResponse(url="/users?error=exists", status_code=303)
 
     user = User(number=number, role=role, allowed=bool(allowed), status="active")
     db.add(user)
     await db.commit()
-    return RedirectResponse(url="/admin/users", status_code=303)
+    return RedirectResponse(url="/users", status_code=303)
 
 
 @router.post("/users/{user_id}/toggle")
@@ -100,7 +100,7 @@ async def toggle_user(
     if user:
         user.allowed = not user.allowed
         await db.commit()
-    return RedirectResponse(url="/admin/users", status_code=303)
+    return RedirectResponse(url="/users", status_code=303)
 
 
 @router.post("/users/{user_id}/delete")
@@ -114,7 +114,7 @@ async def delete_user(
     if user:
         await db.delete(user)
         await db.commit()
-    return RedirectResponse(url="/admin/users", status_code=303)
+    return RedirectResponse(url="/users", status_code=303)
 
 
 # ---------------------------------------------------------------------------
@@ -175,4 +175,4 @@ async def send_reply(
     db.add(msg)
     await db.commit()
 
-    return RedirectResponse(url=f"/admin/messages?user_id={user_id}", status_code=303)
+    return RedirectResponse(url=f"/messages?user_id={user_id}", status_code=303)
