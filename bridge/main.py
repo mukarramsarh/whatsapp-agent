@@ -11,10 +11,12 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from database import AsyncSessionLocal, Message, User, init_db
 from admin import router as admin_router
 from whatsapp import (
+    MEDIA_DIR,
     MEDIA_MESSAGE_KEYS,
     download_and_save,
     send_text,
 )
+import ocr
 
 load_dotenv()
 
@@ -115,7 +117,7 @@ async def _get_or_create_user(number: str, name: str | None) -> tuple[User, bool
 
 async def _store_message(
     user_id: str, text: str, attachment_json: str | None
-) -> None:
+) -> str:
     async with AsyncSessionLocal() as db:
         msg = Message(
             user_id=user_id,
@@ -126,6 +128,50 @@ async def _store_message(
         )
         db.add(msg)
         await db.commit()
+        await db.refresh(msg)
+        return msg.id
+
+
+async def _update_attachment(msg_id: str, attachment_json: str) -> None:
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(select(Message).where(Message.id == msg_id))
+        msg = result.scalar_one_or_none()
+        if msg:
+            msg.attachment = attachment_json
+            await db.commit()
+
+
+async def _run_ocr(msg_id: str, jid: str, meta: dict) -> None:
+    """Background task: OCR a media file, update DB, reply to user."""
+    rel_path = meta.get("path", "")
+    if not rel_path:
+        return
+
+    filename_part = rel_path.split("/", 1)[-1]
+    file_path = MEDIA_DIR / filename_part
+    if not file_path.exists():
+        logger.warning("OCR: file not found: %s", file_path)
+        return
+
+    try:
+        file_bytes = file_path.read_bytes()
+    except Exception as exc:
+        logger.error("OCR: cannot read %s: %s", file_path, exc)
+        return
+
+    filename = meta.get("name") or file_path.name
+    logger.info("OCR: processing %s (%d bytes)", filename, len(file_bytes))
+
+    extracted = await ocr.submit_and_wait(file_bytes, filename)
+
+    if extracted:
+        meta["ocr_text"] = extracted
+        await _update_attachment(msg_id, json.dumps(meta))
+        logger.info("OCR: extracted %d chars from %s", len(extracted), filename)
+        await send_text(jid, f"Extracted text from your file:\n\n{extracted}")
+    else:
+        logger.warning("OCR: no text extracted from %s", filename)
+        await send_text(jid, "I received your file but could not extract any text from it.")
 
 
 async def process_webhook(payload: dict) -> None:
@@ -190,9 +236,15 @@ async def process_webhook(payload: dict) -> None:
                 "size": 0,
             })
 
-    await _store_message(user.id, text, attachment_json)
+    msg_id = await _store_message(user.id, text, attachment_json)
 
-    # Phase 1 auto-reply (text messages only; skip if media-only)
+    # Auto-reply: OCR for images/PDFs, echo for plain text
+    if attachment_json:
+        meta = json.loads(attachment_json)
+        if ocr.is_ocreable(meta.get("mime", "")):
+            asyncio.create_task(_run_ocr(msg_id, remote_jid, meta))
+            return
+
     if text:
         reply = f'Hi! I got your message: "{text}". I will reply to you soon.'
         await send_text(remote_jid, reply)
