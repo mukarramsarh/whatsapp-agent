@@ -190,7 +190,8 @@ async def send_reply(
     db: AsyncSession = Depends(get_db),
     _: str = Depends(require_auth),
 ):
-    jid = number if "@" in number else f"{number}@s.whatsapp.net"
+    clean = number.strip().lstrip("+")
+    jid = clean if "@" in clean else f"{clean}@s.whatsapp.net"
     attachment_json: str | None = None
 
     has_file = file and file.filename

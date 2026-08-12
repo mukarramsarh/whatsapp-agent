@@ -33,6 +33,14 @@ def _headers() -> dict:
     return {"apikey": EVOLUTION_API_KEY, "Content-Type": "application/json"}
 
 
+def _clean_jid(jid: str) -> str:
+    """Ensure JID has no leading + and has @s.whatsapp.net suffix."""
+    jid = jid.strip().lstrip("+")
+    if "@" not in jid:
+        jid = f"{jid}@s.whatsapp.net"
+    return jid
+
+
 def media_type_from_mime(mimetype: str) -> str:
     if mimetype.startswith("image/"):
         return "image"
@@ -54,6 +62,7 @@ def ext_from_mime(mimetype: str, filename: str = "") -> str:
 # ---------------------------------------------------------------------------
 
 async def send_text(jid: str, text: str) -> None:
+    jid = _clean_jid(jid)
     url = f"{EVOLUTION_API_URL}/message/sendText/{INSTANCE_NAME}"
     try:
         async with httpx.AsyncClient(timeout=30) as client:
@@ -71,6 +80,7 @@ async def send_media(
     filename: str,
     caption: str = "",
 ) -> bool:
+    jid = _clean_jid(jid)
     url = f"{EVOLUTION_API_URL}/message/sendMedia/{INSTANCE_NAME}"
     payload = {
         "number": jid,
