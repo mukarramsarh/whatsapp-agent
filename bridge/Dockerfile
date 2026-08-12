@@ -9,4 +9,4 @@ COPY . .
 
 EXPOSE 5021
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "5021", "--log-config", "/dev/null"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "5021", "--no-access-log"]
