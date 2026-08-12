@@ -30,14 +30,17 @@ async def _register_webhook(retries: int = 10, delay: float = 8.0) -> None:
     url = f"{EVOLUTION_API_URL}/webhook/set/{INSTANCE_NAME}"
     headers = {"apikey": EVOLUTION_API_KEY, "Content-Type": "application/json"}
     payload = {
-        "url": WEBHOOK_URL,
-        "webhook_by_events": False,
-        "webhook_base64": False,
-        "events": [
-            "MESSAGES_UPSERT",
-            "CONNECTION_UPDATE",
-            "QRCODE_UPDATED",
-        ],
+        "webhook": {
+            "enabled": True,
+            "url": WEBHOOK_URL,
+            "webhookByEvents": False,
+            "webhookBase64": False,
+            "events": [
+                "MESSAGES_UPSERT",
+                "CONNECTION_UPDATE",
+                "QRCODE_UPDATED",
+            ],
+        }
     }
 
     for attempt in range(1, retries + 1):
