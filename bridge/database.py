@@ -127,6 +127,16 @@ class KnowledgeDoc(Base):
 # Seed data
 # ---------------------------------------------------------------------------
 
+def _env_default(env_var: str, fallback: str) -> str:
+    """Seed value for a setting: use the env var if set, else the hardcoded fallback.
+
+    Only consulted the first time a setting row is created — after that the DB
+    value (editable in /settings) is the source of truth, matching the rest of
+    the settings table.
+    """
+    return os.getenv(env_var) or fallback
+
+
 DEFAULT_SETTINGS: list[tuple[str, str, str, str]] = [
     # (key, value, category, description)
     ("master_prompt",
@@ -134,11 +144,9 @@ DEFAULT_SETTINGS: list[tuple[str, str, str, str]] = [
      "Help users accurately and professionally with procurement, documents, data, and more. "
      "Use your available tools when appropriate. If you need more information, ask the user.",
      "ai", "Main system prompt injected into every conversation"),
-    ("ai_base_url",        "http://localhost:8000/v1",       "ai",         "OpenAI-compatible LLM base URL"),
-    ("ai_model",           "gpt-4o-mini",                   "ai",         "Model name to use for inference"),
-    ("ai_api_key",         "local-key",                     "ai",         "API key for the LLM endpoint"),
-    ("ai_embedding_url",   "",                              "ai",         "Embeddings endpoint (leave empty to disable vector search)"),
-    ("ai_embedding_model", "text-embedding-3-small",        "ai",         "Embedding model name"),
+    ("ai_base_url",        _env_default("AI_BASE_URL", "http://localhost:8000/v1"), "ai", "OpenAI-compatible LLM base URL (seeded from AI_BASE_URL on first boot)"),
+    ("ai_model",           _env_default("AI_MODEL", "gpt-4o-mini"),                 "ai", "Model name to use for inference (seeded from AI_MODEL on first boot)"),
+    ("ai_api_key",         _env_default("AI_API_KEY", "local-key"),                 "ai", "API key for the LLM endpoint (seeded from AI_API_KEY on first boot)"),
     ("agent_max_iterations", "10",                          "ai",         "Max ReAct tool-calling iterations per request"),
     ("context_recent_count",  "20",   "context",  "Number of most-recent messages to include as context"),
     ("context_old_count",     "5",    "context",  "Number of historical (vector-retrieved) messages to include"),
@@ -147,9 +155,6 @@ DEFAULT_SETTINGS: list[tuple[str, str, str, str]] = [
     ("confidence_threshold",  "0.7",  "confidence","Minimum confidence score (0.0–1.0) to accept a response"),
     ("confidence_max_retries","2",    "confidence","Max retries when confidence is below threshold"),
     ("voice_enabled",         "false","voice",     "Enable voice message transcription and TTS replies"),
-    ("voice_stt_model",       "base", "voice",     "Whisper model size: tiny | base | small | medium | large"),
-    ("voice_tts_voice_en",    "en-US-JennyNeural","voice","edge-tts voice for English"),
-    ("voice_tts_voice_ar",    "ar-SA-HamedNeural","voice","edge-tts voice for Arabic"),
 ]
 
 DEFAULT_ROLES: list[tuple[str, str, str]] = [

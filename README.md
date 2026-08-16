@@ -21,11 +21,22 @@ WhatsApp User
 
 ---
 
-## Phase 1 — Current
+## Phase 1 — `main` branch (live)
 
 - Evolution API connected to WhatsApp
-- Bridge echoes every incoming message back:
-  `Hi! I got your message: "<text>". I will reply to you soon.`
+- User allow-list with an admin panel (users, messages, media/OCR review)
+- Inbound media download + OCR for images/PDFs
+
+## Phase 2 — `phase_01` branch (in development, not yet deployed)
+
+Everything above, plus a ReAct AI agent:
+- Pluggable tool framework (OCR, internal DB query, SSH, external HTTP API, knowledge-base search)
+- Hybrid RAG context (recent messages + vector similarity search)
+- Confidence scoring with automatic retry
+- Bilingual Arabic/English replies, with voice (STT/TTS)
+- `/settings` and `/tools` admin pages for live configuration
+
+See `CLAUDE.md` for full architecture, env vars, and gotchas.
 
 ---
 

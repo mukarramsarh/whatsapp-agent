@@ -46,8 +46,6 @@
         ('ai_base_url',      'LLM Base URL',          'text',     'http://192.168.100.62:8000/v1'),
         ('ai_model',         'Model Name',             'text',     'gpt-4o-mini or your model id'),
         ('ai_api_key',       'API Key',                'password', 'your-api-key'),
-        ('ai_embedding_url', 'Embedding Base URL',     'text',     'http://192.168.100.62:8000/v1 (leave empty to disable)'),
-        ('ai_embedding_model','Embedding Model Name',  'text',     'text-embedding-3-small'),
         ('agent_max_iterations','Max ReAct Iterations','number',   '10'),
       ] %}
       <div>
@@ -61,6 +59,16 @@
         {% endif %}
       </div>
       {% endfor %}
+
+      <div class="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+        <p class="text-xs text-slate-500">
+          Embeddings (vector search) are configured via the
+          <code class="bg-slate-100 px-1 rounded">AI_EMBEDDING_URL</code> /
+          <code class="bg-slate-100 px-1 rounded">AI_EMBEDDING_MODEL</code> environment variables,
+          not here — they require a container restart to change.
+          Leave <code class="bg-slate-100 px-1 rounded">AI_EMBEDDING_URL</code> empty to disable vector search.
+        </p>
+      </div>
 
       <div>
         <label class="block text-sm font-medium text-slate-700 mb-1">Master System Prompt</label>
@@ -193,33 +201,15 @@
         </label>
       </div>
 
-      {% for key, label, opts in [
-        ('voice_stt_model', 'Whisper STT Model', ['tiny','base','small','medium','large']),
-      ] %}
-      <div>
-        <label class="block text-sm font-medium text-slate-700 mb-1">{{ label }}</label>
-        <select name="{{ key }}" class="border border-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-wa focus:border-wa">
-          {% set current = settings.get(key, {}).value if settings.get(key) else opts[0] %}
-          {% for opt in opts %}
-          <option value="{{ opt }}" {% if opt == current %}selected{% endif %}>{{ opt }}</option>
-          {% endfor %}
-        </select>
-        <p class="text-xs text-slate-400 mt-0.5">Larger = more accurate, slower, more RAM. <code class="bg-slate-100 px-1 rounded">base</code> is a good balance.</p>
+      <div class="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+        <p class="text-xs text-slate-500">
+          The Whisper model size (<code class="bg-slate-100 px-1 rounded">WHISPER_MODEL</code>) and
+          edge-tts voice names (<code class="bg-slate-100 px-1 rounded">TTS_VOICE_EN</code> /
+          <code class="bg-slate-100 px-1 rounded">TTS_VOICE_AR</code>) are set via environment
+          variables and require a container restart to change — the Whisper model is loaded once
+          per process on first use.
+        </p>
       </div>
-      {% endfor %}
-
-      {% for key, label, placeholder in [
-        ('voice_tts_voice_en', 'English TTS Voice (edge-tts)', 'en-US-JennyNeural'),
-        ('voice_tts_voice_ar', 'Arabic TTS Voice (edge-tts)',  'ar-SA-HamedNeural'),
-      ] %}
-      <div>
-        <label class="block text-sm font-medium text-slate-700 mb-1">{{ label }}</label>
-        <input type="text" name="{{ key }}"
-               value="{{ settings.get(key, {}).value if settings.get(key) else placeholder }}"
-               placeholder="{{ placeholder }}"
-               class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-wa focus:border-wa font-mono">
-      </div>
-      {% endfor %}
     </div>
     <div class="flex justify-end mt-4">
       <button type="submit" class="px-5 py-2 bg-wa text-white text-sm font-medium rounded-lg hover:bg-wa-dark transition-colors">Save Voice Settings</button>

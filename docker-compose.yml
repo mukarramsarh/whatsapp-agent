@@ -134,7 +134,10 @@ services:
     networks:
       - wa-network
     depends_on:
-      - evolution-api
+      postgres:
+        condition: service_healthy
+      evolution-api:
+        condition: service_started
     restart: unless-stopped
 
   pgadmin:
