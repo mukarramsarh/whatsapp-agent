@@ -37,34 +37,64 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        rm -rf ./prisma/migrations
+        echo "=== db-migrate start ==="
+        echo "PWD=$$(pwd)"
+        echo "NODE=$$(node --version 2>/dev/null || echo 'not found')"
+
+        # Build DATABASE_URL via node so special chars in password are URL-encoded
+        export DATABASE_URL=$$(node -e "
+          const u = new URL('postgresql://h:h@h/h');
+          u.username = process.env.POSTGRES_USER || 'postgres';
+          u.password = process.env.POSTGRES_PASSWORD || '';
+          u.hostname = process.env.POSTGRES_HOST || 'postgres';
+          u.port     = process.env.POSTGRES_PORT  || '5432';
+          u.pathname = '/' + (process.env.POSTGRES_DB || 'evolution');
+          process.stdout.write(u.href);
+        " 2>&1)
+        if [ $$? -ne 0 ]; then
+          echo "ERROR: failed to build DATABASE_URL — node output: $$DATABASE_URL"
+          exit 1
+        fi
+        echo "DATABASE_URL built OK (password hidden)"
+
+        # Copy migrations to where Prisma expects them
+        rm -rf ./prisma/migrations 2>/dev/null || true
         cp -r ./prisma/postgresql-migrations ./prisma/migrations
+        if [ $$? -ne 0 ]; then
+          echo "ERROR: could not copy migrations — check image structure"
+          ls -la ./prisma/ 2>/dev/null || echo "(prisma dir not found)"
+          exit 1
+        fi
 
-        out=$$(npx prisma migrate deploy --schema ./prisma/postgresql-schema.prisma 2>&1)
-        code=$$?
-        printf '%s\n' "$$out"
+        echo "=== running prisma migrate deploy ==="
+        npx prisma migrate deploy --schema ./prisma/postgresql-schema.prisma > /tmp/migrate.log 2>&1
+        DEPLOY_EXIT=$$?
+        cat /tmp/migrate.log
 
-        if [ $$code -eq 0 ]; then
-          echo "db-migrate: migrations applied successfully"
+        if [ $$DEPLOY_EXIT -eq 0 ]; then
+          echo "=== db-migrate: done ==="
           exit 0
         fi
 
-        if echo "$$out" | grep -q "P3005"; then
-          echo "db-migrate: P3005 detected — baselining existing schema..."
+        if grep -q "P3005" /tmp/migrate.log; then
+          echo "=== P3005 detected — baselining all migrations ==="
           for f in prisma/postgresql-migrations/*.sql; do
             n=$$(basename "$$f" .sql)
             npx prisma migrate resolve --applied "$$n" --schema ./prisma/postgresql-schema.prisma 2>/dev/null || true
           done
-          echo "db-migrate: baseline complete, retrying migrate deploy..."
+          echo "=== baseline complete — retrying migrate deploy ==="
           npx prisma migrate deploy --schema ./prisma/postgresql-schema.prisma
           exit $$?
         fi
 
-        echo "db-migrate: migration failed with unexpected error (see above)"
-        exit $$code
+        echo "=== db-migrate: unexpected failure (exit $$DEPLOY_EXIT) — see logs above ==="
+        exit $$DEPLOY_EXIT
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-evolution}
-      DATABASE_CONNECTION_URI: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-evolution}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-evolution}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       DATABASE_PROVIDER: postgresql
     networks:
       - wa-network
