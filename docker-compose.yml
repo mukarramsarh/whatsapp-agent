@@ -75,9 +75,10 @@ services:
 
         if grep -q "P3005" /tmp/migrate.log; then
           echo "=== P3005 detected — baselining all migrations ==="
-          for f in prisma/postgresql-migrations/*.sql; do
-            n=$$(basename "$$f" .sql)
-            npx prisma migrate resolve --applied "$$n" --schema ./prisma/postgresql-schema.prisma 2>/dev/null || true
+          for d in prisma/postgresql-migrations/*/; do
+            n=$$(basename "$$d")
+            echo "  resolving: $$n"
+            npx prisma migrate resolve --applied "$$n" --schema ./prisma/postgresql-schema.prisma 2>&1 || true
           done
           echo "=== baseline complete — retrying migrate deploy ==="
           npx prisma migrate deploy --schema ./prisma/postgresql-schema.prisma
