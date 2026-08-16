@@ -49,7 +49,7 @@ services:
           u.hostname = process.env.POSTGRES_HOST || 'postgres';
           u.port     = process.env.POSTGRES_PORT  || '5432';
           u.pathname = '/' + (process.env.POSTGRES_DB || 'evolution');
-          require('fs').writeFileSync('.env', 'DATABASE_URL=' + u.href + '\n');
+          require('fs').writeFileSync('.env', 'DATABASE_CONNECTION_URI=' + u.href + '\n');
           console.log('DATABASE_URL written to .env (password hidden)');
         "
         if [ $$? -ne 0 ]; then echo "ERROR: failed to write .env"; exit 1; fi
