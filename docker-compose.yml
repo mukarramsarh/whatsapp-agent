@@ -38,31 +38,28 @@ services:
     command:
       - |
         echo "=== db-migrate start ==="
-        echo "PWD=$$(pwd)"
-        echo "NODE=$$(node --version 2>/dev/null || echo 'not found')"
 
-        # Build DATABASE_URL via node so special chars in password are URL-encoded
-        export DATABASE_URL=$$(node -e "
+        # Overwrite the container's baked-in .env with correct DATABASE_URL.
+        # Prisma CLI loads .env from CWD before env vars, so we must write it.
+        # node's URL constructor URL-encodes special chars (@ # !) in the password.
+        node -e "
           const u = new URL('postgresql://h:h@h/h');
           u.username = process.env.POSTGRES_USER || 'postgres';
           u.password = process.env.POSTGRES_PASSWORD || '';
           u.hostname = process.env.POSTGRES_HOST || 'postgres';
           u.port     = process.env.POSTGRES_PORT  || '5432';
           u.pathname = '/' + (process.env.POSTGRES_DB || 'evolution');
-          process.stdout.write(u.href);
-        " 2>&1)
-        if [ $$? -ne 0 ]; then
-          echo "ERROR: failed to build DATABASE_URL — node output: $$DATABASE_URL"
-          exit 1
-        fi
-        echo "DATABASE_URL built OK (password hidden)"
+          require('fs').writeFileSync('.env', 'DATABASE_URL=' + u.href + '\n');
+          console.log('DATABASE_URL written to .env (password hidden)');
+        "
+        if [ $$? -ne 0 ]; then echo "ERROR: failed to write .env"; exit 1; fi
 
         # Copy migrations to where Prisma expects them
         rm -rf ./prisma/migrations 2>/dev/null || true
         cp -r ./prisma/postgresql-migrations ./prisma/migrations
         if [ $$? -ne 0 ]; then
-          echo "ERROR: could not copy migrations — check image structure"
-          ls -la ./prisma/ 2>/dev/null || echo "(prisma dir not found)"
+          echo "ERROR: could not copy migrations"
+          ls -la ./prisma/ 2>/dev/null || echo "(prisma dir missing)"
           exit 1
         fi
 
@@ -87,7 +84,7 @@ services:
           exit $$?
         fi
 
-        echo "=== db-migrate: unexpected failure (exit $$DEPLOY_EXIT) — see logs above ==="
+        echo "=== db-migrate: unexpected failure (exit $$DEPLOY_EXIT) ==="
         exit $$DEPLOY_EXIT
     environment:
       POSTGRES_HOST: postgres
