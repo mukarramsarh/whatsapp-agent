@@ -32,6 +32,26 @@ services:
       retries: 5
     restart: unless-stopped
 
+  # ---------------------------------------------------------------------------
+  # DGX port forwarders — the DGX inference servers bind to 127.0.0.1 (owned by
+  # another team, cannot be rebound), so these socat relays expose them on
+  # 0.0.0.0 for the bridge container. network_mode: host lets each relay reach
+  # the host's loopback. Bridge connects via 192.168.100.62:<forward-port>.
+  #   gpt-oss  127.0.0.1:8002  -> 0.0.0.0:18002
+  #   ollama   127.0.0.1:11434 -> 0.0.0.0:21434
+  # ---------------------------------------------------------------------------
+  fwd-gptoss:
+    image: alpine/socat
+    command: TCP-LISTEN:18002,fork,reuseaddr TCP:127.0.0.1:8002
+    network_mode: host
+    restart: unless-stopped
+
+  fwd-ollama:
+    image: alpine/socat
+    command: TCP-LISTEN:21434,fork,reuseaddr TCP:127.0.0.1:11434
+    network_mode: host
+    restart: unless-stopped
+
   db-migrate:
     image: evoapicloud/evolution-api:latest
     entrypoint: ["/bin/sh", "-c"]

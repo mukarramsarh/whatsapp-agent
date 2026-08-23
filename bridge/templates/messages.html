@@ -4,298 +4,114 @@
 {% block content %}
 <div class="flex items-center justify-between mb-6">
   <div>
-    <h1 class="text-xl font-semibold text-slate-800">Messages</h1>
-    {% if selected_user %}
-    <p class="text-sm text-slate-500 mt-0.5">
-      Conversation with <span class="font-medium text-slate-700">+{{ selected_user.number }}</span>
-      {% if selected_user.name %}<span class="text-slate-400"> — {{ selected_user.name }}</span>{% endif %}
-    </p>
-    {% endif %}
+    <h1 class="text-xl font-semibold text-slate-800">Conversations</h1>
+    <p class="text-sm text-slate-500 mt-0.5">Grouped by number — click a conversation to open the full chat.</p>
   </div>
-  {% if selected_user %}
-  <button onclick="openReply('{{ selected_user.number }}', '{{ selected_user.id }}')"
-          class="flex items-center gap-1.5 bg-wa text-white text-sm font-medium px-4 py-2 rounded-lg hover:bg-wa-dark transition-colors">
-    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"/>
+  {% if conversations %}
+  <span class="text-xs text-slate-400">{{ conversations | length }} conversation{% if conversations | length != 1 %}s{% endif %}</span>
+  {% endif %}
+</div>
+
+<!-- Filters -->
+<form method="get" class="bg-white rounded-xl shadow-sm px-4 py-4 mb-4">
+  <div class="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-3">
+    <div class="lg:col-span-2">
+      <label class="block text-xs text-slate-500 font-medium mb-1">User</label>
+      <select name="user_id"
+              class="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-wa focus:border-wa">
+        <option value="">All users</option>
+        {% for u in users %}
+        <option value="{{ u.id }}" {% if u.id == filters.user_id %}selected{% endif %}>
+          +{{ u.number }}{% if u.name %} — {{ u.name }}{% endif %}
+        </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label class="block text-xs text-slate-500 font-medium mb-1">Phone number</label>
+      <input type="text" name="number" value="{{ filters.number }}" placeholder="e.g. 96659…"
+             class="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-wa focus:border-wa">
+    </div>
+    <div>
+      <label class="block text-xs text-slate-500 font-medium mb-1">Status</label>
+      <select name="status"
+              class="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-wa focus:border-wa">
+        <option value="">Any</option>
+        {% for s in statuses %}
+        <option value="{{ s }}" {% if s == filters.status %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label class="block text-xs text-slate-500 font-medium mb-1">From</label>
+      <input type="date" name="date_from" value="{{ filters.date_from }}"
+             class="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-wa focus:border-wa">
+    </div>
+    <div>
+      <label class="block text-xs text-slate-500 font-medium mb-1">To</label>
+      <input type="date" name="date_to" value="{{ filters.date_to }}"
+             class="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-wa focus:border-wa">
+    </div>
+    <div class="lg:col-span-4">
+      <label class="block text-xs text-slate-500 font-medium mb-1">Search text</label>
+      <input type="text" name="q" value="{{ filters.q }}" placeholder="Search message content…"
+             class="w-full border border-slate-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-wa focus:border-wa">
+    </div>
+    <div class="lg:col-span-2 flex items-end gap-2">
+      <button type="submit"
+              class="flex-1 bg-wa text-white text-sm font-medium px-4 py-1.5 rounded-lg hover:bg-wa-dark transition-colors">
+        Apply filters
+      </button>
+      <a href="/messages" class="px-4 py-1.5 text-sm text-slate-500 hover:text-slate-700 transition-colors">Clear</a>
+    </div>
+  </div>
+</form>
+
+<!-- Conversation list -->
+<div class="bg-white rounded-xl shadow-sm overflow-hidden divide-y divide-slate-100">
+  {% for c in conversations %}
+  {% set att = c.attachment %}
+  <a href="/conversations/{{ c.user.id }}" target="_blank"
+     class="flex items-center gap-4 px-4 py-3 hover:bg-slate-50 transition-colors">
+    <!-- Avatar -->
+    <div class="shrink-0 w-10 h-10 rounded-full bg-wa/10 text-wa-dark flex items-center justify-center font-semibold">
+      {{ (c.user.name or c.user.number)[:2] | upper }}
+    </div>
+    <!-- Main -->
+    <div class="flex-1 min-w-0">
+      <div class="flex items-center gap-2">
+        <span class="font-semibold text-slate-700">+{{ c.user.number }}</span>
+        {% if c.user.name %}<span class="text-xs text-slate-400 truncate">{{ c.user.name }}</span>{% endif %}
+        <span class="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-slate-100 text-slate-500">{{ c.user.role }}</span>
+      </div>
+      <div class="text-sm text-slate-500 truncate mt-0.5">
+        {% if c.last.direction == 'outbound' %}<span class="text-wa-dark">You: </span>{% endif %}
+        {% if c.last.message %}{{ c.last.message }}
+        {% elif att and att.name %}<span class="italic">📎 {{ att.name }}</span>
+        {% else %}<span class="text-slate-300">—</span>{% endif %}
+      </div>
+    </div>
+    <!-- Meta -->
+    <div class="shrink-0 text-right">
+      <div class="text-xs text-slate-400 whitespace-nowrap">
+        {{ c.last.created_at.strftime('%Y-%m-%d %H:%M') if c.last.created_at else '' }}
+      </div>
+      <div class="mt-1 inline-block text-xs text-slate-500 bg-slate-100 rounded-full px-2 py-0.5">
+        {{ c.count }} msg{% if c.count != 1 %}s{% endif %}
+      </div>
+    </div>
+    <svg class="w-4 h-4 text-slate-300 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
     </svg>
-    Reply
-  </button>
-  {% endif %}
-</div>
-
-<!-- Filter -->
-<div class="bg-white rounded-xl shadow-sm px-4 py-3 mb-4 flex items-center gap-3">
-  <form method="get" class="flex items-center gap-3">
-    <label class="text-xs text-slate-500 font-medium uppercase tracking-wide">Filter</label>
-    <select name="user_id" onchange="this.form.submit()"
-            class="border border-slate-200 rounded-lg px-3 py-1.5 text-sm outline-none focus:ring-2 focus:ring-wa focus:border-wa">
-      <option value="">All users</option>
-      {% for u in users %}
-      <option value="{{ u.id }}" {% if u.id == user_id %}selected{% endif %}>
-        +{{ u.number }}{% if u.name %} — {{ u.name }}{% endif %}
-      </option>
-      {% endfor %}
-    </select>
-    {% if user_id %}
-    <a href="/messages" class="text-sm text-slate-400 hover:text-slate-600 transition-colors">Clear</a>
-    {% endif %}
-  </form>
-  {% if messages %}
-  <span class="ml-auto text-xs text-slate-400">{{ messages | length }} message{% if messages | length != 1 %}s{% endif %}</span>
-  {% endif %}
-</div>
-
-<!-- Table -->
-<div class="bg-white rounded-xl shadow-sm overflow-hidden">
-  <table class="w-full text-sm">
-    <thead>
-      <tr class="bg-slate-800 text-slate-300 text-xs uppercase tracking-wider">
-        <th class="text-left px-4 py-3">Time</th>
-        <th class="text-left px-4 py-3">Number</th>
-        <th class="text-left px-4 py-3">Dir</th>
-        <th class="text-left px-4 py-3">Content</th>
-        <th class="text-left px-4 py-3">Status</th>
-        <th class="px-4 py-3"></th>
-      </tr>
-    </thead>
-    <tbody class="divide-y divide-slate-100">
-      {% for row in messages %}
-      {% set att = row.attachment %}
-      {% set is_image = att and att.mime and att.mime.startswith('image/') %}
-      {% set is_video = att and att.mime and att.mime.startswith('video/') %}
-      {% set is_audio = att and att.mime and att.mime.startswith('audio/') %}
-      {% set is_doc   = att and att.mime and not is_image and not is_video and not is_audio %}
-
-      <tr class="hover:bg-slate-50 transition-colors {% if row.message.direction == 'outbound' %}bg-wa/5{% endif %}">
-        <td class="px-4 py-3 text-slate-400 text-xs whitespace-nowrap">
-          {{ row.message.created_at.strftime('%Y-%m-%d %H:%M') if row.message.created_at else '—' }}
-        </td>
-        <td class="px-4 py-3">
-          <div class="font-semibold text-slate-700">+{{ row.user.number }}</div>
-          {% if row.user.name %}<div class="text-xs text-slate-400">{{ row.user.name }}</div>{% endif %}
-        </td>
-        <td class="px-4 py-3">
-          {% if row.message.direction == 'inbound' %}
-          <span class="inline-flex items-center gap-1 px-2 py-0.5 bg-blue-50 text-blue-600 text-xs font-medium rounded-full">
-            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"/>
-            </svg>
-            In
-          </span>
-          {% else %}
-          <span class="inline-flex items-center gap-1 px-2 py-0.5 bg-wa/10 text-wa-dark text-xs font-medium rounded-full">
-            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18"/>
-            </svg>
-            Out
-          </span>
-          {% endif %}
-        </td>
-
-        <!-- Content cell -->
-        <td class="px-4 py-3 max-w-sm">
-          <!-- Text / caption -->
-          {% if row.message.message %}
-          <p class="text-slate-700 break-words whitespace-pre-wrap mb-2">{{ row.message.message }}</p>
-          {% endif %}
-
-          <!-- Image -->
-          {% if is_image and att.path %}
-          <a href="/{{ att.path }}" target="_blank">
-            <img src="/{{ att.path }}" alt="{{ att.name }}"
-                 class="max-h-40 rounded-lg border border-slate-100 object-cover hover:opacity-90 transition-opacity">
-          </a>
-
-          <!-- Video -->
-          {% elif is_video and att.path %}
-          <video controls class="max-h-40 rounded-lg border border-slate-100 max-w-xs">
-            <source src="/{{ att.path }}" type="{{ att.mime }}">
-          </video>
-
-          <!-- Audio -->
-          {% elif is_audio and att.path %}
-          <audio controls class="w-full max-w-xs mt-1">
-            <source src="/{{ att.path }}" type="{{ att.mime }}">
-          </audio>
-
-          <!-- Document / other -->
-          {% elif att and att.path %}
-          <a href="/{{ att.path }}" download="{{ att.name }}"
-             class="inline-flex items-center gap-2 px-3 py-2 bg-slate-100 hover:bg-slate-200 rounded-lg text-xs text-slate-700 transition-colors">
-            <svg class="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                    d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
-            </svg>
-            <span class="truncate max-w-[200px]">{{ att.name }}</span>
-            {% if att.size %}<span class="text-slate-400 shrink-0">{{ (att.size / 1024) | int }}KB</span>{% endif %}
-          </a>
-
-          <!-- Media noted but not downloaded -->
-          {% elif att and not att.path %}
-          <span class="inline-flex items-center gap-1 text-xs text-slate-400">
-            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                    d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/>
-            </svg>
-            {{ att.name }}
-          </span>
-          {% endif %}
-
-          {% if att and att.ocr_text %}
-          <div class="mt-2 p-2 bg-amber-50 rounded-lg border border-amber-100">
-            <p class="text-xs font-semibold text-amber-700 mb-1">OCR Text</p>
-            <p class="text-xs text-slate-700 whitespace-pre-wrap break-words max-h-32 overflow-y-auto">{{ att.ocr_text }}</p>
-          </div>
-          {% endif %}
-
-          {% if not row.message.message and not att %}
-          <span class="text-slate-400">—</span>
-          {% endif %}
-        </td>
-
-        <td class="px-4 py-3">
-          <span class="inline-block px-2 py-0.5 bg-slate-100 text-slate-500 text-xs rounded">
-            {{ row.message.status }}
-          </span>
-        </td>
-        <td class="px-4 py-3">
-          {% if row.message.direction == 'inbound' %}
-          <button onclick="openReply('{{ row.user.number }}', '{{ row.user.id }}')"
-                  class="p-1.5 rounded hover:bg-wa/10 text-slate-400 hover:text-wa-dark transition-colors" title="Reply">
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                    d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"/>
-            </svg>
-          </button>
-          {% endif %}
-        </td>
-      </tr>
-      {% else %}
-      <tr>
-        <td colspan="6" class="text-center py-16 text-slate-400">
-          <svg class="w-10 h-10 mx-auto mb-3 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
-                  d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/>
-          </svg>
-          <p class="text-sm">No messages yet.</p>
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</div>
-
-<!-- Reply Modal -->
-<div id="replyModal" class="hidden fixed inset-0 z-50 flex items-center justify-center">
-  <div class="absolute inset-0 bg-black/40 backdrop-blur-sm" onclick="closeModal()"></div>
-  <div class="relative bg-white rounded-2xl shadow-xl w-full max-w-md mx-4">
-    <form action="/reply" method="post" enctype="multipart/form-data">
-      <div class="flex items-center justify-between px-6 pt-5 pb-4 border-b border-slate-100">
-        <h2 class="font-semibold text-slate-800">Send Reply</h2>
-        <button type="button" onclick="closeModal()" class="text-slate-400 hover:text-slate-600 transition-colors">
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-          </svg>
-        </button>
-      </div>
-
-      <div class="px-6 py-5 space-y-4">
-        <!-- To -->
-        <div>
-          <label class="block text-sm font-medium text-slate-700 mb-1">To</label>
-          <input type="text" id="replyNumber" name="number" readonly
-                 class="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-sm text-slate-600 outline-none">
-          <input type="hidden" id="replyUserId" name="user_id">
-        </div>
-
-        <!-- Message text -->
-        <div>
-          <label class="block text-sm font-medium text-slate-700 mb-1">Message <span class="text-slate-400 font-normal">(optional if sending a file)</span></label>
-          <textarea id="replyText" name="text" rows="3"
-                    placeholder="Type your message…"
-                    class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-wa focus:border-wa resize-none"></textarea>
-        </div>
-
-        <!-- File attachment -->
-        <div>
-          <label class="block text-sm font-medium text-slate-700 mb-1">Attachment <span class="text-slate-400 font-normal">(optional)</span></label>
-          <label id="fileLabel"
-                 class="flex items-center gap-2 border border-dashed border-slate-300 rounded-lg px-3 py-3 cursor-pointer hover:border-wa hover:bg-wa/5 transition-colors">
-            <svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                    d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"/>
-            </svg>
-            <span id="fileLabelText" class="text-sm text-slate-500">Click to choose image, video, audio or document</span>
-            <input type="file" name="file" id="fileInput" class="sr-only"
-                   accept="image/*,video/*,audio/*,.pdf,.doc,.docx,.xls,.xlsx,.txt">
-          </label>
-        </div>
-
-        <!-- File preview -->
-        <div id="filePreview" class="hidden">
-          <img id="previewImg" class="max-h-32 rounded-lg border border-slate-100 object-cover" src="" alt="">
-          <p id="previewName" class="text-xs text-slate-500 mt-1 truncate"></p>
-        </div>
-      </div>
-
-      <div class="flex justify-end gap-2 px-6 pb-5">
-        <button type="button" onclick="closeModal()"
-                class="px-4 py-2 text-sm text-slate-600 hover:text-slate-800 transition-colors">Cancel</button>
-        <button type="submit"
-                class="flex items-center gap-1.5 px-4 py-2 bg-wa text-white text-sm font-medium rounded-lg hover:bg-wa-dark transition-colors">
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/>
-          </svg>
-          Send
-        </button>
-      </div>
-    </form>
+  </a>
+  {% else %}
+  <div class="text-center py-16 text-slate-400">
+    <svg class="w-10 h-10 mx-auto mb-3 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+            d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"/>
+    </svg>
+    <p class="text-sm">No conversations match these filters.</p>
   </div>
+  {% endfor %}
 </div>
-{% endblock %}
-
-{% block scripts %}
-<script>
-  function openReply(number, userId) {
-    document.getElementById('replyNumber').value = '+' + number;
-    document.getElementById('replyUserId').value = userId;
-    document.getElementById('replyText').value = '';
-    clearFilePreview();
-    document.getElementById('replyModal').classList.remove('hidden');
-    document.getElementById('replyText').focus();
-  }
-  function closeModal() {
-    document.getElementById('replyModal').classList.add('hidden');
-  }
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
-
-  // File preview
-  document.getElementById('fileInput').addEventListener('change', function () {
-    const file = this.files[0];
-    if (!file) { clearFilePreview(); return; }
-
-    document.getElementById('fileLabelText').textContent = file.name;
-    document.getElementById('previewName').textContent =
-      file.name + ' (' + (file.size / 1024).toFixed(1) + ' KB)';
-
-    if (file.type.startsWith('image/')) {
-      const reader = new FileReader();
-      reader.onload = e => {
-        document.getElementById('previewImg').src = e.target.result;
-        document.getElementById('previewImg').classList.remove('hidden');
-      };
-      reader.readAsDataURL(file);
-    } else {
-      document.getElementById('previewImg').classList.add('hidden');
-    }
-    document.getElementById('filePreview').classList.remove('hidden');
-  });
-
-  function clearFilePreview() {
-    document.getElementById('fileInput').value = '';
-    document.getElementById('fileLabelText').textContent = 'Click to choose image, video, audio or document';
-    document.getElementById('filePreview').classList.add('hidden');
-    document.getElementById('previewImg').src = '';
-  }
-</script>
 {% endblock %}

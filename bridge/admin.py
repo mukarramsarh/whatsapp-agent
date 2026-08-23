@@ -1,6 +1,7 @@
 import json
 import os
 import secrets
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -8,7 +9,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, Uplo
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import AsyncSessionLocal, Message, Setting, ToolConfig, User, UserRole
@@ -148,41 +149,120 @@ async def delete_user(user_id: str, db: AsyncSession = Depends(get_db), _: str =
 # Messages
 # ---------------------------------------------------------------------------
 
+def _parse_date(value: str | None, end: bool = False) -> datetime | None:
+    """Parse a yyyy-mm-dd form value; for `end` return the next midnight
+    (exclusive upper bound) so the whole day is included."""
+    if not value:
+        return None
+    try:
+        d = datetime.strptime(value.strip(), "%Y-%m-%d")
+    except ValueError:
+        return None
+    return d + timedelta(days=1) if end else d
+
+
 @router.get("/messages", response_class=HTMLResponse)
 async def admin_messages(
     request: Request,
     user_id: Optional[str] = None,
+    number: Optional[str] = None,
+    status: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    q: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     _: str = Depends(require_auth),
 ):
+    """Conversation list — messages grouped by number, newest activity first."""
     users_result = await db.execute(select(User).order_by(User.number))
     users = users_result.scalars().all()
 
+    statuses_result = await db.execute(select(Message.status).distinct())
+    statuses = sorted(s for s in statuses_result.scalars().all() if s)
+
+    conds = []
+    if user_id:
+        conds.append(Message.user_id == user_id)
+    if number:
+        conds.append(User.number.ilike(f"%{number.strip()}%"))
+    if status:
+        conds.append(Message.status == status)
+    if q:
+        conds.append(Message.message.ilike(f"%{q.strip()}%"))
+    df, dt = _parse_date(date_from), _parse_date(date_to, end=True)
+    if df:
+        conds.append(Message.created_at >= df)
+    if dt:
+        conds.append(Message.created_at < dt)
+
     query = select(Message, User).join(User, Message.user_id == User.id)
-    if user_id:
-        query = query.where(Message.user_id == user_id)
-    query = query.order_by(Message.created_at.desc()).limit(200)
-
+    if conds:
+        query = query.where(and_(*conds))
+    query = query.order_by(Message.created_at.desc()).limit(1000)
     rows = (await db.execute(query)).all()
-    messages = [
-        {"message": m, "user": u, "attachment": _parse_attachment(m.attachment)}
-        for m, u in rows
-    ]
 
-    selected_user = None
-    if user_id:
-        r = await db.execute(select(User).where(User.id == user_id))
-        selected_user = r.scalar_one_or_none()
+    # Group by user; rows are newest-first so the first seen per user is latest.
+    convos: dict[str, dict] = {}
+    for m, u in rows:
+        c = convos.get(u.id)
+        if c is None:
+            convos[u.id] = {
+                "user": u,
+                "last": m,
+                "attachment": _parse_attachment(m.attachment),
+                "count": 1,
+            }
+        else:
+            c["count"] += 1
+    conversations = list(convos.values())
 
     return templates.TemplateResponse(
         "messages.html",
         {
             "request": request,
-            "messages": messages,
+            "conversations": conversations,
             "users": users,
-            "selected_user": selected_user,
-            "user_id": user_id,
+            "statuses": statuses,
+            "filters": {
+                "user_id": user_id or "",
+                "number": number or "",
+                "status": status or "",
+                "date_from": date_from or "",
+                "date_to": date_to or "",
+                "q": q or "",
+            },
         },
+    )
+
+
+@router.get("/conversations/{user_id}", response_class=HTMLResponse)
+async def admin_conversation(
+    request: Request,
+    user_id: str,
+    db: AsyncSession = Depends(get_db),
+    _: str = Depends(require_auth),
+):
+    """Full chat thread with one number, oldest-first (chat order)."""
+    r = await db.execute(select(User).where(User.id == user_id))
+    user = r.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    msgs = (
+        await db.execute(
+            select(Message)
+            .where(Message.user_id == user_id)
+            .order_by(Message.created_at.asc())
+            .limit(1000)
+        )
+    ).scalars().all()
+    messages = [
+        {"message": m, "attachment": _parse_attachment(m.attachment)} for m in msgs
+    ]
+
+    return templates.TemplateResponse(
+        "conversation.html",
+        {"request": request, "user": user, "messages": messages},
     )
 
 
@@ -219,7 +299,7 @@ async def send_reply(
         ))
         await db.commit()
 
-    return RedirectResponse(url=f"/messages?user_id={user_id}", status_code=303)
+    return RedirectResponse(url=f"/conversations/{user_id}", status_code=303)
 
 
 # ---------------------------------------------------------------------------
