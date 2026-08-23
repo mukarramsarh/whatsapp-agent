@@ -17,6 +17,8 @@ openai==1.35.0
 
 # Voice — STT
 faster-whisper==1.0.3
+# huggingface_hub (faster-whisper's model downloader) needs requests at runtime
+requests>=2.31.0
 
 # Voice — TTS (Microsoft neural voices, Arabic + English)
 # >=7 required: older versions 403 on the Sec-MS-GEC token Microsoft now enforces.
