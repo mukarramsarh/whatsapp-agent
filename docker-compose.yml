@@ -37,12 +37,19 @@ services:
   # another team, cannot be rebound), so these socat relays expose them on
   # 0.0.0.0 for the bridge container. network_mode: host lets each relay reach
   # the host's loopback. Bridge connects via 192.168.100.62:<forward-port>.
-  #   gpt-oss  127.0.0.1:8002  -> 0.0.0.0:18002
-  #   ollama   127.0.0.1:11434 -> 0.0.0.0:21434
+  #   gpt-oss    127.0.0.1:8002  -> 0.0.0.0:18002
+  #   qwen3-vl   127.0.0.1:8003  -> 0.0.0.0:18003
+  #   ollama     127.0.0.1:11434 -> 0.0.0.0:21434
   # ---------------------------------------------------------------------------
   fwd-gptoss:
     image: alpine/socat
     command: TCP-LISTEN:18002,fork,reuseaddr TCP:127.0.0.1:8002
+    network_mode: host
+    restart: unless-stopped
+
+  fwd-qwen:
+    image: alpine/socat
+    command: TCP-LISTEN:18003,fork,reuseaddr TCP:127.0.0.1:8003
     network_mode: host
     restart: unless-stopped
 
