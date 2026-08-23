@@ -19,7 +19,8 @@ openai==1.35.0
 faster-whisper==1.0.3
 
 # Voice — TTS (Microsoft neural voices, Arabic + English)
-edge-tts==6.1.12
+# >=7 required: older versions 403 on the Sec-MS-GEC token Microsoft now enforces.
+edge-tts>=7.0.0
 
 # SSH tool
 asyncssh==2.14.2
