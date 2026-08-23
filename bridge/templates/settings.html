@@ -60,6 +60,22 @@
       </div>
       {% endfor %}
 
+      <!-- Tool calling mode -->
+      {% set tool_mode = settings.get('agent_tool_mode', {}).value if settings.get('agent_tool_mode') else 'prompt' %}
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">Tool Calling Mode</label>
+        <select name="agent_tool_mode"
+                class="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-wa focus:border-wa font-mono">
+          <option value="prompt" {% if tool_mode == 'prompt' %}selected{% endif %}>prompt — bridge parses a JSON tool envelope (works on any server)</option>
+          <option value="native" {% if tool_mode == 'native' %}selected{% endif %}>native — server returns OpenAI tool_calls (needs vLLM tool parser)</option>
+        </select>
+        <p class="text-xs text-slate-400 mt-0.5">
+          Use <code class="bg-slate-100 px-1 rounded">prompt</code> unless the LLM server has tool-call
+          parsing enabled (e.g. vLLM <code class="bg-slate-100 px-1 rounded">--enable-auto-tool-choice</code>),
+          then switch to <code class="bg-slate-100 px-1 rounded">native</code>.
+        </p>
+      </div>
+
       <div class="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
         <p class="text-xs text-slate-500">
           Embeddings (vector search) are configured via the
