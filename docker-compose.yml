@@ -190,16 +190,23 @@ services:
       MEDIA_DIR: /app/media
       OCR_API_URL: ${OCR_API_URL:-http://192.168.100.62:5010}
       OCR_API_KEY: ${OCR_API_KEY:-}
-      # AI agent
-      AI_BASE_URL: ${AI_BASE_URL:-http://localhost:8000/v1}
-      AI_MODEL: ${AI_MODEL:-gpt-4o-mini}
-      AI_API_KEY: ${AI_API_KEY:-local-key}
-      AI_EMBEDDING_URL: ${AI_EMBEDDING_URL:-}
-      AI_EMBEDDING_MODEL: ${AI_EMBEDDING_MODEL:-text-embedding-3-small}
+      # AI agent — DGX Spark models (gpt-oss chat, bge-m3 embeddings)
+      AI_BASE_URL: ${AI_BASE_URL:-http://192.168.100.62:8002/v1}
+      AI_MODEL: ${AI_MODEL:-gpt-oss:20b}
+      AI_API_KEY: ${AI_API_KEY:-none}
+      AI_MAX_RETRIES: ${AI_MAX_RETRIES:-4}
+      AI_EMBEDDING_URL: ${AI_EMBEDDING_URL:-http://192.168.100.62:11434}
+      AI_EMBEDDING_MODEL: ${AI_EMBEDDING_MODEL:-bge-m3}
+      AI_EMBEDDING_API: ${AI_EMBEDDING_API:-ollama}
+      EMBEDDING_DIM: ${EMBEDDING_DIM:-1024}
       # Voice
       WHISPER_MODEL: ${WHISPER_MODEL:-base}
       TTS_VOICE_EN: ${TTS_VOICE_EN:-en-US-JennyNeural}
       TTS_VOICE_AR: ${TTS_VOICE_AR:-ar-SA-HamedNeural}
+    # Lets the container reach DGX services bound on the host via
+    # http://host.docker.internal:<port> (alternative to the LAN IP above).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - media_data:/app/media
     networks:

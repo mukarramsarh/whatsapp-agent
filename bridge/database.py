@@ -144,9 +144,10 @@ DEFAULT_SETTINGS: list[tuple[str, str, str, str]] = [
      "Help users accurately and professionally with procurement, documents, data, and more. "
      "Use your available tools when appropriate. If you need more information, ask the user.",
      "ai", "Main system prompt injected into every conversation"),
-    ("ai_base_url",        _env_default("AI_BASE_URL", "http://localhost:8000/v1"), "ai", "OpenAI-compatible LLM base URL (seeded from AI_BASE_URL on first boot)"),
-    ("ai_model",           _env_default("AI_MODEL", "gpt-4o-mini"),                 "ai", "Model name to use for inference (seeded from AI_MODEL on first boot)"),
-    ("ai_api_key",         _env_default("AI_API_KEY", "local-key"),                 "ai", "API key for the LLM endpoint (seeded from AI_API_KEY on first boot)"),
+    ("ai_base_url",        _env_default("AI_BASE_URL", "http://192.168.100.62:8002/v1"), "ai", "OpenAI-compatible LLM base URL (seeded from AI_BASE_URL on first boot)"),
+    ("ai_model",           _env_default("AI_MODEL", "gpt-oss:20b"),                 "ai", "Model name to use for inference (seeded from AI_MODEL on first boot)"),
+    ("ai_api_key",         _env_default("AI_API_KEY", "none"),                      "ai", "API key for the LLM endpoint (seeded from AI_API_KEY on first boot)"),
+    ("ai_max_retries",     _env_default("AI_MAX_RETRIES", "4"),                     "ai", "Max retries with backoff on 429/5xx from the LLM"),
     ("agent_max_iterations", "10",                          "ai",         "Max ReAct tool-calling iterations per request"),
     ("context_recent_count",  "20",   "context",  "Number of most-recent messages to include as context"),
     ("context_old_count",     "5",    "context",  "Number of historical (vector-retrieved) messages to include"),

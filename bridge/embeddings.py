@@ -5,6 +5,7 @@ Cosine similarity search done in-process — fine for thousands of messages.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
@@ -17,27 +18,69 @@ logger = logging.getLogger("bridge.embeddings")
 EMBEDDING_URL = os.getenv("AI_EMBEDDING_URL", "")
 EMBEDDING_MODEL = os.getenv("AI_EMBEDDING_MODEL", "text-embedding-3-small")
 EMBEDDING_API_KEY = os.getenv("AI_API_KEY", "local-key")
-EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "1536"))
+EMBEDDING_DIM = int(os.getenv("EMBEDDING_DIM", "1024"))
+# Transport: "ollama" (native /api/embed) or "openai" (OpenAI-compatible /embeddings)
+EMBEDDING_API = os.getenv("AI_EMBEDDING_API", "openai").lower()
+MAX_RETRIES = int(os.getenv("AI_MAX_RETRIES", "4"))
+
+# Status codes worth retrying: rate-limit + transient server errors.
+_RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
 
 # ---------------------------------------------------------------------------
 # Embedding generation
 # ---------------------------------------------------------------------------
 
+async def _post_with_retry(
+    client: httpx.AsyncClient, url: str, payload: dict, headers: dict
+) -> httpx.Response:
+    """POST with exponential backoff on 429 / 5xx / transport errors.
+
+    The DGX inference servers return 429 when their GPU memory budget is
+    saturated, so we back off (1s → 2s → 4s …) rather than fail immediately.
+    Non-retryable HTTP errors and the final attempt re-raise.
+    """
+    delay = 1.0
+    for attempt in range(MAX_RETRIES):
+        try:
+            r = await client.post(url, json=payload, headers=headers)
+            if r.status_code in _RETRYABLE_STATUS:
+                r.raise_for_status()  # -> HTTPStatusError, handled below
+            r.raise_for_status()
+            return r
+        except (httpx.HTTPStatusError, httpx.TransportError) as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            retryable = status is None or status in _RETRYABLE_STATUS
+            if attempt == MAX_RETRIES - 1 or not retryable:
+                raise
+            logger.debug("Embedding POST retry %d (status=%s) in %.0fs", attempt + 1, status, delay)
+            await asyncio.sleep(delay)
+            delay *= 2
+    # Unreachable — the loop either returns or raises.
+    raise RuntimeError("embedding retry loop exhausted")
+
+
 async def embed(text: str) -> list[float] | None:
     """Call the embeddings API and return a float vector."""
     if not EMBEDDING_URL or not text.strip():
         return None
     try:
-        url = EMBEDDING_URL.rstrip("/") + "/embeddings"
-        headers = {
-            "Authorization": f"Bearer {EMBEDDING_API_KEY}",
-            "Content-Type": "application/json",
-        }
-        payload = {"model": EMBEDDING_MODEL, "input": text[:8000]}
         async with httpx.AsyncClient(timeout=30) as client:
-            r = await client.post(url, json=payload, headers=headers)
-            r.raise_for_status()
+            if EMBEDDING_API == "ollama":
+                url = EMBEDDING_URL.rstrip("/") + "/api/embed"
+                payload = {"model": EMBEDDING_MODEL, "input": text[:8000]}
+                headers = {"Content-Type": "application/json"}
+                r = await _post_with_retry(client, url, payload, headers)
+                return r.json()["embeddings"][0]
+
+            # OpenAI-compatible transport
+            url = EMBEDDING_URL.rstrip("/") + "/embeddings"
+            headers = {
+                "Authorization": f"Bearer {EMBEDDING_API_KEY}",
+                "Content-Type": "application/json",
+            }
+            payload = {"model": EMBEDDING_MODEL, "input": text[:8000]}
+            r = await _post_with_retry(client, url, payload, headers)
             return r.json()["data"][0]["embedding"]
     except Exception as exc:
         logger.debug("Embedding failed (non-fatal): %s", exc)

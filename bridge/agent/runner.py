@@ -41,11 +41,15 @@ class AgentRunner:
     ):
         self.settings = settings
         self.tools: dict[str, Tool] = {t.name: t for t in tools}
+        # The SDK retries 429/5xx with exponential backoff and honours
+        # Retry-After — the DGX inference servers 429 under GPU-memory pressure.
         self.client = AsyncOpenAI(
-            base_url=settings.get("ai_base_url", "http://localhost:8000/v1"),
-            api_key=settings.get("ai_api_key", "local-key"),
+            base_url=settings.get("ai_base_url", "http://192.168.100.62:8002/v1"),
+            api_key=settings.get("ai_api_key", "none"),
+            max_retries=int(settings.get("ai_max_retries", "4")),
+            timeout=120.0,
         )
-        self.model = settings.get("ai_model", "gpt-4o-mini")
+        self.model = settings.get("ai_model", "gpt-oss:20b")
         self.max_iterations = int(settings.get("agent_max_iterations", "10"))
         self.confidence_enabled = settings.get("confidence_enabled", "false").lower() == "true"
         self.confidence_threshold = float(settings.get("confidence_threshold", "0.7"))
