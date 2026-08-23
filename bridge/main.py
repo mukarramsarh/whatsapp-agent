@@ -12,6 +12,7 @@ from sqlalchemy import select
 from database import AsyncSessionLocal, Message, Setting, ToolConfig, UserRole, User, init_db
 from admin import router as admin_router
 from whatsapp import MEDIA_DIR, MEDIA_MESSAGE_KEYS, download_and_save, send_media, send_text
+from wa_format import to_plain, to_whatsapp
 from agent.tools import ALL_TOOL_CLASSES
 import agent.context as ctx_builder
 import agent.language as lang_module
@@ -213,7 +214,8 @@ async def _run_agent_pipeline(
         attachment_meta=attachment_meta,
     )
 
-    reply_text = result.content
+    # Convert the model's Markdown into WhatsApp-safe formatting before sending.
+    reply_text = to_whatsapp(result.content)
     logger.info(
         "Agent replied (%s, conf=%.2f, tools=%s, iters=%d): %d chars",
         language, result.confidence,
@@ -225,7 +227,7 @@ async def _run_agent_pipeline(
     # Deliver reply: voice or text
     voice_enabled = settings.get("voice_enabled", "false").lower() == "true"
     if is_voice and voice_enabled:
-        audio = await voice_module.synthesize(reply_text, language)
+        audio = await voice_module.synthesize(to_plain(reply_text), language)
         if audio:
             await send_media(remote_jid, audio, "audio/mpeg", "reply.mp3")
         else:
@@ -233,7 +235,7 @@ async def _run_agent_pipeline(
     else:
         await send_text(remote_jid, reply_text)
 
-    # Persist outbound message
+    # Persist outbound message (store what the user actually saw)
     out_id = await _store_message(user.id, reply_text, None, "outbound", "sent")
     asyncio.create_task(_embed_message(out_id, reply_text, number, "outbound"))
 

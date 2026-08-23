@@ -23,6 +23,18 @@ _MASTER_PROMPT_FALLBACK = (
     "Use your available tools when appropriate."
 )
 
+# Appended to every system prompt — the reply is delivered as a WhatsApp message.
+_WHATSAPP_FORMAT_RULES = (
+    "--- Output Formatting (WhatsApp) ---\n"
+    "Your reply is sent as a WhatsApp message. Use WhatsApp formatting ONLY:\n"
+    "- Bold: a single asterisk around text, *like this*. Never use ** or Markdown headings (#).\n"
+    "- Italic: _like this_. Strikethrough: ~like this~. Monospace: ```like this```.\n"
+    "- Do NOT use Markdown tables, HTML tags, or <br>. WhatsApp cannot render them.\n"
+    "- For lists, put each item on its own line starting with \"• \".\n"
+    "- Present structured or tabular information as short labeled lines or bullet points, never a table.\n"
+    "- Keep replies concise and easy to read on a phone."
+)
+
 
 @dataclass
 class AgentResult:
@@ -197,6 +209,7 @@ class AgentRunner:
         if role_prompt:
             parts.append(f"\n--- User Role Context ---\n{role_prompt}")
         parts.append(f"\n--- Language ---\n{lang_instruction(language)}")
+        parts.append(f"\n{_WHATSAPP_FORMAT_RULES}")
         return "\n".join(parts)
 
     @staticmethod
