@@ -132,9 +132,9 @@
     document.getElementById('configModal').classList.remove('hidden');
 
     try {
-      const r = await fetch('/tools/' + toolName + '/config', {
-        headers: { 'Authorization': 'Basic ' + btoa('{{ request.headers.get("authorization", "").replace("Basic ", "") }}') }
-      });
+      // Same-origin request — the browser reuses the Basic Auth credentials
+      // it already has, so no manual Authorization header is needed.
+      const r = await fetch('/tools/' + toolName + '/config', { credentials: 'same-origin' });
       const data = await r.json();
       document.getElementById('configJson').value = JSON.stringify(data, null, 2);
     } catch {
@@ -157,14 +157,13 @@
       return;
     }
     try {
-      await fetch('/tools/' + currentTool + '/config', {
+      const r = await fetch('/tools/' + currentTool + '/config', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Basic ' + btoa('{{ request.headers.get("authorization", "").replace("Basic ", "") }}')
-        },
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(parsed)
       });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
       closeConfig();
       const t = document.getElementById('toast');
       t.classList.remove('hidden');
