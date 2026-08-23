@@ -67,6 +67,15 @@ _MASTER_PROMPT_FALLBACK = (
     "Use your available tools when appropriate."
 )
 
+# Hard language constraint — the system serves only English and Arabic.
+_LANGUAGE_POLICY = (
+    "--- Language Policy ---\n"
+    "You must respond ONLY in English or Arabic. Never reply in any other language, "
+    "regardless of the language used earlier in the conversation or inside any document, "
+    "OCR text, or tool result. Match the user's language: if they write/speak Arabic, "
+    "reply in Modern Standard Arabic with a professional Saudi tone; otherwise reply in English."
+)
+
 # Appended to every system prompt — the reply is delivered as a WhatsApp message.
 _WHATSAPP_FORMAT_RULES = (
     "--- Output Formatting (WhatsApp) ---\n"
@@ -310,6 +319,7 @@ class AgentRunner:
         if role_prompt:
             parts.append(f"\n--- User Role Context ---\n{role_prompt}")
         parts.append(f"\n--- Language ---\n{lang_instruction(language)}")
+        parts.append(f"\n{_LANGUAGE_POLICY}")
         parts.append(f"\n{_WHATSAPP_FORMAT_RULES}")
         return "\n".join(parts)
 

@@ -55,16 +55,34 @@ async def transcribe(audio_path: Path, language: str | None = None) -> str | Non
 
     try:
         def _run():
+            # Constrain to the two supported languages. Detect first; keep the
+            # result only if it is English or Arabic, otherwise force Arabic —
+            # Whisper otherwise mislabels Arabic as e.g. Hebrew (both RTL Semitic)
+            # and the reply comes back in the wrong language.
+            forced = language  # honour an explicit caller override if given
+            if forced is None:
+                segs, info = model.transcribe(
+                    str(audio_path), beam_size=5, language=None, vad_filter=True,
+                )
+                detected = info.language
+                if detected in ("en", "ar"):
+                    text = " ".join(s.text for s in segs).strip()
+                    logger.info(
+                        "Transcribed %s: detected=%s (kept), %d chars",
+                        audio_path.name, detected, len(text),
+                    )
+                    return text
+                # Not one of the two supported languages → redo as Arabic.
+                logger.info("Transcribed %s: detected=%s → forcing Arabic", audio_path.name, detected)
+                forced = "ar"
+
             segs, info = model.transcribe(
-                str(audio_path),
-                beam_size=5,
-                language=language,  # None = auto-detect
-                vad_filter=True,
+                str(audio_path), beam_size=5, language=forced, vad_filter=True,
             )
             text = " ".join(s.text for s in segs).strip()
             logger.info(
-                "Transcribed %s: lang=%s, %d chars",
-                audio_path.name, info.language, len(text),
+                "Transcribed %s: lang=%s (forced), %d chars",
+                audio_path.name, forced, len(text),
             )
             return text
 
