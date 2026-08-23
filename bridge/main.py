@@ -205,13 +205,17 @@ async def _run_agent_pipeline(
         vector_count=int(settings.get("context_vector_count", "5")),
     )
 
+    # For a voice note the transcript IS the message — don't hand the audio file
+    # to the agent as an attachment, or it treats the request as "process a file".
+    agent_attachment = None if is_voice else attachment_meta
+
     runner = AgentRunner(settings=settings, tools=tools)
     result = await runner.run(
         user_message=user_message,
         context_messages=context_msgs,
         role_prompt=role_prompt,
         language=language,
-        attachment_meta=attachment_meta,
+        attachment_meta=agent_attachment,
     )
 
     # Convert the model's Markdown into WhatsApp-safe formatting before sending.
@@ -224,16 +228,15 @@ async def _run_agent_pipeline(
         len(reply_text),
     )
 
-    # Deliver reply: voice or text
+    # Deliver reply. Always send text; for a voice note, also send a spoken version.
+    await send_text(remote_jid, reply_text)
     voice_enabled = settings.get("voice_enabled", "false").lower() == "true"
     if is_voice and voice_enabled:
         audio = await voice_module.synthesize(to_plain(reply_text), language)
         if audio:
             await send_media(remote_jid, audio, "audio/mpeg", "reply.mp3")
         else:
-            await send_text(remote_jid, reply_text)
-    else:
-        await send_text(remote_jid, reply_text)
+            logger.info("Voice reply skipped — TTS unavailable; text already sent.")
 
     # Persist outbound message (store what the user actually saw)
     out_id = await _store_message(user.id, reply_text, None, "outbound", "sent")
