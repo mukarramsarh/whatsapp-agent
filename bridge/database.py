@@ -148,6 +148,7 @@ DEFAULT_SETTINGS: list[tuple[str, str, str, str]] = [
     ("ai_model",           _env_default("AI_MODEL", "gpt-oss:20b"),                 "ai", "Model name to use for inference (seeded from AI_MODEL on first boot)"),
     ("ai_api_key",         _env_default("AI_API_KEY", "none"),                      "ai", "API key for the LLM endpoint (seeded from AI_API_KEY on first boot)"),
     ("ai_max_retries",     _env_default("AI_MAX_RETRIES", "4"),                     "ai", "Max retries with backoff on 429/5xx from the LLM"),
+    ("agent_tool_mode",    _env_default("AGENT_TOOL_MODE", "prompt"),               "ai", "Tool calling: 'native' (server returns tool_calls) or 'prompt' (bridge parses a JSON envelope). Use 'prompt' if the LLM server does not parse tool calls."),
     ("agent_max_iterations", "10",                          "ai",         "Max ReAct tool-calling iterations per request"),
     ("context_recent_count",  "20",   "context",  "Number of most-recent messages to include as context"),
     ("context_old_count",     "5",    "context",  "Number of historical (vector-retrieved) messages to include"),

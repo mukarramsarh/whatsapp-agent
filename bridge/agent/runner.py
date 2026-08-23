@@ -1,11 +1,19 @@
 """
 ReAct agent runner.
 Reason → Act (tool calls) → Observe → Repeat until final answer.
+
+Two tool-calling modes (setting `agent_tool_mode`):
+- "native": OpenAI function-calling — the server returns structured tool_calls.
+  Requires the LLM server to parse tool calls (e.g. vLLM --enable-auto-tool-choice).
+- "prompt": a JSON-envelope protocol described in the system prompt; the bridge
+  parses the tool call out of the model's text. Works on any chat model, used as
+  a fallback when the server does not emit native tool_calls.
 """
 from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 
 from openai import AsyncOpenAI
@@ -15,6 +23,42 @@ from agent.language import detect as detect_lang, instruction as lang_instructio
 from agent.tools.base import Tool
 
 logger = logging.getLogger("bridge.agent")
+
+
+def _extract_tool_call(content: str) -> tuple[str, dict] | None:
+    """Parse a prompt-mode tool-call envelope out of the model's text.
+
+    Accepts, tolerantly (optionally wrapped in a ```json fence):
+        {"tool_call": {"name": "x", "arguments": {...}}}
+        {"name": "x", "arguments": {...}}
+        {"tool": "x", "arguments": {...}}
+    Returns (name, arguments) or None if no valid envelope is present.
+    """
+    if not content:
+        return None
+    text = content.strip()
+    candidates: list[str] = []
+    fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.S)
+    if fence:
+        candidates.append(fence.group(1))
+    candidates.append(text)
+    if "{" in text and "}" in text:
+        candidates.append(text[text.find("{"): text.rfind("}") + 1])
+
+    for cand in candidates:
+        try:
+            obj = json.loads(cand)
+        except Exception:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        tc = obj.get("tool_call")
+        if isinstance(tc, dict) and tc.get("name"):
+            return tc["name"], tc.get("arguments") or {}
+        name = obj.get("name") or obj.get("tool")
+        if name and "arguments" in obj:
+            return name, obj.get("arguments") or {}
+    return None
 
 _MASTER_PROMPT_FALLBACK = (
     "You are a highly intelligent AI assistant. "
@@ -62,6 +106,8 @@ class AgentRunner:
             timeout=120.0,
         )
         self.model = settings.get("ai_model", "gpt-oss:20b")
+        # "native" = OpenAI tool_calls; "prompt" = JSON-envelope parsed by the bridge.
+        self.tool_mode = settings.get("agent_tool_mode", "prompt").lower()
         self.max_iterations = int(settings.get("agent_max_iterations", "10"))
         self.confidence_enabled = settings.get("confidence_enabled", "false").lower() == "true"
         self.confidence_threshold = float(settings.get("confidence_threshold", "0.7"))
@@ -80,8 +126,17 @@ class AgentRunner:
         attachment_meta: dict | None = None,
     ) -> AgentResult:
         system_prompt = self._build_system(role_prompt, language)
+        # Native mode sends the OpenAI tools schema; prompt mode describes the
+        # tools (and the JSON envelope) in the system prompt instead.
+        if self.tool_mode == "native":
+            tools_schema = [t.to_openai_function() for t in self.tools.values()]
+        else:
+            tools_schema = []
+            protocol = self._tool_protocol_prompt()
+            if protocol:
+                system_prompt = f"{system_prompt}\n\n{protocol}"
+
         user_content = self._build_user_content(user_message, attachment_meta)
-        tools_schema = [t.to_openai_function() for t in self.tools.values()]
 
         messages: list[dict] = (
             [{"role": "system", "content": system_prompt}]
@@ -92,6 +147,7 @@ class AgentRunner:
         tool_calls_made: list[str] = []
         final_content = ""
         final_confidence = 1.0
+        final_iterations = 0
 
         for attempt in range(self.confidence_max_retries + 1):
             attempt_messages = list(messages)
@@ -99,6 +155,7 @@ class AgentRunner:
                 attempt_messages, tools_schema
             )
             tool_calls_made.extend(calls)
+            final_iterations = iterations
 
             if not self.confidence_enabled:
                 final_content = result_text
@@ -133,6 +190,7 @@ class AgentRunner:
             language=language,
             tool_calls_made=tool_calls_made,
             confidence=final_confidence,
+            iterations=final_iterations,
         )
 
     # ------------------------------------------------------------------
@@ -180,8 +238,28 @@ class AgentRunner:
                     logger.info("Tool %s executed → %d chars output", fn_name, len(str(tool_result)))
                 continue
 
-            # Final answer
             content = (choice.message.content or "").strip()
+
+            # Prompt-mode fallback: the model emits a JSON tool-call envelope as
+            # text (used when the server does not return native tool_calls).
+            if self.tool_mode != "native" and self.tools:
+                call = _extract_tool_call(content)
+                if call:
+                    name, args = call
+                    tool_calls_made.append(name)
+                    tool_result = await self._execute_tool(name, json.dumps(args))
+                    messages.append({"role": "assistant", "content": content})
+                    messages.append({
+                        "role": "user",
+                        "content": (
+                            f"[Result of {name}]\n{tool_result}\n\n"
+                            f"Use this to continue, or give your final answer to the user."
+                        ),
+                    })
+                    logger.info("Prompt-tool %s executed → %d chars output", name, len(str(tool_result)))
+                    continue
+
+            # Final answer
             return content, tool_calls_made, iteration + 1
 
         # Exhausted iterations — return whatever the last assistant message was
@@ -202,6 +280,29 @@ class AgentRunner:
         except Exception as exc:
             logger.error("Tool %s raised: %s", name, exc)
             return f"Tool error: {exc}"
+
+    def _tool_protocol_prompt(self) -> str:
+        """System-prompt block describing the tools and the JSON call envelope
+        (prompt mode only)."""
+        if not self.tools:
+            return ""
+        lines = [
+            "--- Available Tools ---",
+            "You can call tools to gather information before answering.",
+        ]
+        for t in self.tools.values():
+            props = (t.parameters_schema or {}).get("properties", {})
+            params = ", ".join(f"{k}: {v.get('type', 'any')}" for k, v in props.items())
+            lines.append(f"- {t.name}({params}) — {t.description}")
+        lines += [
+            "",
+            "To call a tool, reply with ONLY this JSON object and nothing else:",
+            '{"tool_call": {"name": "<tool_name>", "arguments": {<args>}}}',
+            "You will then receive the tool's result and may call another tool or answer.",
+            "When you have enough information, reply to the user normally, WITHOUT any JSON.",
+            "Only use the tools listed above, with the exact argument names shown.",
+        ]
+        return "\n".join(lines)
 
     def _build_system(self, role_prompt: str, language: str) -> str:
         master = self.settings.get("master_prompt", _MASTER_PROMPT_FALLBACK).strip()
