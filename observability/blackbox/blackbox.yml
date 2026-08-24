@@ -1,0 +1,8 @@
+modules:
+  http_2xx:
+    prober: http
+    timeout: 5s
+    http:
+      method: GET
+      valid_status_codes: [200, 201, 404]  # 404 still proves the HTTP server is alive
+      preferred_ip_protocol: "ip4"

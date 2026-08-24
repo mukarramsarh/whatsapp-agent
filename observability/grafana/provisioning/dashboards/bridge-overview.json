@@ -1,0 +1,85 @@
+{
+  "id": null,
+  "uid": "wa-bridge-overview",
+  "title": "WA Bridge — Overview",
+  "tags": ["wa-agent", "bridge"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Messages processed (rate)",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "sum(rate(bridge_messages_total[5m])) by (direction)", "legendFormat": "{{direction}}" }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 }
+    },
+    {
+      "id": 2,
+      "title": "LLM call latency (p50/p95)",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "histogram_quantile(0.5, sum(rate(bridge_llm_call_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p50" },
+        { "expr": "histogram_quantile(0.95, sum(rate(bridge_llm_call_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p95" }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 }
+    },
+    {
+      "id": 3,
+      "title": "LLM errors by type",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "sum(rate(bridge_llm_call_errors_total[5m])) by (error_type)", "legendFormat": "{{error_type}}" }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 }
+    },
+    {
+      "id": 4,
+      "title": "Tool calls (by tool + status)",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "sum(rate(bridge_tool_calls_total[5m])) by (tool_name, status)", "legendFormat": "{{tool_name}}-{{status}}" }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 }
+    },
+    {
+      "id": 5,
+      "title": "Confidence score distribution",
+      "type": "heatmap",
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "sum(rate(bridge_confidence_score_bucket[5m])) by (le)", "format": "heatmap", "legendFormat": "{{le}}" }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 }
+    },
+    {
+      "id": 6,
+      "title": "STT / TTS success vs failure",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "sum(rate(bridge_stt_requests_total[5m])) by (status)", "legendFormat": "stt-{{status}}" },
+        { "expr": "sum(rate(bridge_tts_requests_total[5m])) by (status)", "legendFormat": "tts-{{status}}" }
+      ],
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 }
+    },
+    {
+      "id": 7,
+      "title": "HTTP request duration p95 (all routes)",
+      "type": "timeseries",
+      "datasource": "Prometheus",
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, handler))", "legendFormat": "{{handler}}" }
+      ],
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 24 }
+    }
+  ]
+}

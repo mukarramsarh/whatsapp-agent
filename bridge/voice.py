@@ -10,7 +10,10 @@ import io
 import logging
 import os
 import tempfile
+import time
 from pathlib import Path
+
+import metrics
 
 logger = logging.getLogger("bridge.voice")
 
@@ -51,8 +54,10 @@ async def transcribe(audio_path: Path, language: str | None = None) -> str | Non
     model = await _get_whisper()
     if model is None:
         logger.warning("Whisper model not loaded — skipping transcription.")
+        metrics.stt_requests_total.labels(status="unavailable").inc()
         return None
 
+    start = time.monotonic()
     try:
         def _run():
             # Constrain to the two supported languages. Detect first; keep the
@@ -86,8 +91,13 @@ async def transcribe(audio_path: Path, language: str | None = None) -> str | Non
             )
             return text
 
-        return await asyncio.to_thread(_run)
+        result = await asyncio.to_thread(_run)
+        metrics.stt_duration_seconds.observe(time.monotonic() - start)
+        metrics.stt_requests_total.labels(status="success").inc()
+        return result
     except Exception as exc:
+        metrics.stt_duration_seconds.observe(time.monotonic() - start)
+        metrics.stt_requests_total.labels(status="failure").inc()
         logger.error("Transcription failed for %s: %s", audio_path, exc)
         return None
 
@@ -111,6 +121,7 @@ async def synthesize(text: str, language: str = "en") -> bytes | None:
     if not text:
         return None
 
+    start = time.monotonic()
     try:
         import edge_tts
 
@@ -124,15 +135,22 @@ async def synthesize(text: str, language: str = "en") -> bytes | None:
 
         if not audio_chunks:
             logger.warning("TTS returned no audio for language=%s", language)
+            metrics.tts_duration_seconds.observe(time.monotonic() - start)
+            metrics.tts_requests_total.labels(status="empty", language=language).inc()
             return None
 
         audio_bytes = b"".join(audio_chunks)
         logger.info("TTS synthesized %d bytes (lang=%s, voice=%s)", len(audio_bytes), language, voice)
+        metrics.tts_duration_seconds.observe(time.monotonic() - start)
+        metrics.tts_requests_total.labels(status="success", language=language).inc()
         return audio_bytes
 
     except ImportError:
         logger.warning("edge-tts not installed — voice replies disabled.")
+        metrics.tts_requests_total.labels(status="unavailable", language=language).inc()
         return None
     except Exception as exc:
+        metrics.tts_duration_seconds.observe(time.monotonic() - start)
+        metrics.tts_requests_total.labels(status="failure", language=language).inc()
         logger.error("TTS synthesis failed: %s", exc)
         return None
