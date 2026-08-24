@@ -138,6 +138,11 @@ class AgentRunner:
         self.confidence_enabled = settings.get("confidence_enabled", "false").lower() == "true"
         self.confidence_threshold = float(settings.get("confidence_threshold", "0.7"))
         self.confidence_max_retries = int(settings.get("confidence_max_retries", "2"))
+        # Separate, smaller budget for a failed LLM call (connection/timeout) —
+        # distinct from confidence_max_retries, which retries a genuine but
+        # low-quality answer. Kept small so a real outage surfaces to the user
+        # quickly instead of making them wait through the full confidence budget.
+        self.llm_connection_max_retries = int(settings.get("llm_connection_max_retries", "1"))
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -174,8 +179,14 @@ class AgentRunner:
         final_content = ""
         final_confidence = 1.0
         final_iterations = 0
+        connection_failures = 0
 
-        for attempt in range(self.confidence_max_retries + 1):
+        # The outer loop bound must cover whichever retry budget is larger, so
+        # neither the connection-retry nor the confidence-retry path gets cut
+        # short by the other's setting.
+        max_attempts = max(self.confidence_max_retries, self.llm_connection_max_retries) + 1
+
+        for attempt in range(max_attempts):
             attempt_messages = list(messages)
             try:
                 result_text, calls, iterations = await self._react_loop(
@@ -183,17 +194,18 @@ class AgentRunner:
                 )
             except LLMCallError as exc:
                 # The call itself failed — never confidence-score or ship this as
-                # an answer. Retry with a fresh attempt, or give an honest,
-                # language-appropriate apology once attempts are exhausted.
-                if attempt < self.confidence_max_retries:
+                # an answer. Retry with a fresh attempt (own, smaller budget), or
+                # give an honest, language-appropriate apology once exhausted.
+                if connection_failures < self.llm_connection_max_retries:
+                    connection_failures += 1
                     logger.warning(
-                        "LLM call failed on attempt %d/%d (%s) — retrying.",
-                        attempt + 1, self.confidence_max_retries + 1, exc,
+                        "LLM call failed (%d/%d retries) (%s) — retrying.",
+                        connection_failures, self.llm_connection_max_retries, exc,
                     )
                     continue
                 logger.error(
-                    "LLM call failed on final attempt %d/%d (%s) — giving up.",
-                    attempt + 1, self.confidence_max_retries + 1, exc,
+                    "LLM call failed after %d retries (%s) — giving up.",
+                    connection_failures, exc,
                 )
                 final_content = _LLM_UNAVAILABLE_MESSAGE.get(language, _LLM_UNAVAILABLE_MESSAGE["en"])
                 break
@@ -230,6 +242,7 @@ class AgentRunner:
                 })
             else:
                 final_content = result_text
+                break
 
         return AgentResult(
             content=final_content or "I'm sorry, I couldn't generate a response.",
