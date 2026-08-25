@@ -272,7 +272,17 @@ class AgentRunner:
             try:
                 response = await self.client.chat.completions.create(**kwargs)
             except Exception as exc:
-                logger.error("LLM call failed: %s", exc)
+                # str(exc) on openai.APIConnectionError just says "Connection
+                # error." — the real diagnosis lives in the wrapped cause
+                # (httpx.ConnectError vs ConnectTimeout vs ReadTimeout vs
+                # RemoteProtocolError each point to a different root cause).
+                cause = exc.__cause__
+                logger.error(
+                    "LLM call failed: %s | type=%s | cause=%s: %s",
+                    exc, type(exc).__name__,
+                    type(cause).__name__ if cause else "none",
+                    cause or "n/a",
+                )
                 # Raise rather than return a fabricated "answer" — a failed call
                 # must never be confidence-scored or sent to the user as content.
                 raise LLMCallError(str(exc)) from exc
