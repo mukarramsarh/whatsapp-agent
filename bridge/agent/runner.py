@@ -33,14 +33,40 @@ class LLMCallError(Exception):
     """
 
 
-def _extract_tool_call(content: str) -> tuple[str, dict] | None:
+def _infer_tool_from_bare_args(obj: dict, tools: dict[str, Tool]) -> tuple[str, dict] | None:
+    """Last-resort recovery for a known gpt-oss/vLLM quirk: the model
+    sometimes emits only the bare arguments object with no tool name at all
+    (the tool-name channel gets dropped). Infer the tool ONLY when exactly
+    one enabled tool's schema unambiguously matches — every given key is a
+    valid property of that tool, and every required property of that tool
+    is present in the given keys. Never guess when zero or multiple tools
+    match, to avoid invoking the wrong (possibly destructive) tool.
+    """
+    if not obj:
+        return None
+    obj_keys = set(obj.keys())
+    matches = []
+    for tool in tools.values():
+        schema = tool.parameters_schema or {}
+        properties = set(schema.get("properties", {}).keys())
+        required = set(schema.get("required", []))
+        if obj_keys <= properties and required <= obj_keys:
+            matches.append(tool.name)
+    if len(matches) == 1:
+        return matches[0], obj
+    return None
+
+
+def _extract_tool_call(content: str, tools: dict[str, Tool] | None = None) -> tuple[str, dict] | None:
     """Parse a prompt-mode tool-call envelope out of the model's text.
 
     Accepts, tolerantly (optionally wrapped in a ```json fence):
         {"tool_call": {"name": "x", "arguments": {...}}}
         {"name": "x", "arguments": {...}}
         {"tool": "x", "arguments": {...}}
-    Returns (name, arguments) or None if no valid envelope is present.
+    As a last resort (when `tools` is given), also recovers a bare arguments
+    object with no name/tool wrapper at all — see _infer_tool_from_bare_args.
+    Returns (name, arguments) or None if no valid/inferable call is present.
     """
     if not content:
         return None
@@ -66,6 +92,10 @@ def _extract_tool_call(content: str) -> tuple[str, dict] | None:
         name = obj.get("name") or obj.get("tool")
         if name and "arguments" in obj:
             return name, obj.get("arguments") or {}
+        if tools:
+            inferred = _infer_tool_from_bare_args(obj, tools)
+            if inferred:
+                return inferred
     return None
 
 _MASTER_PROMPT_FALLBACK = (
@@ -310,7 +340,7 @@ class AgentRunner:
             # Prompt-mode fallback: the model emits a JSON tool-call envelope as
             # text (used when the server does not return native tool_calls).
             if self.tool_mode != "native" and self.tools:
-                call = _extract_tool_call(content)
+                call = _extract_tool_call(content, self.tools)
                 if call:
                     name, args = call
                     tool_calls_made.append(name)
@@ -365,6 +395,8 @@ class AgentRunner:
             "",
             "To call a tool, reply with ONLY this JSON object and nothing else:",
             '{"tool_call": {"name": "<tool_name>", "arguments": {<args>}}}',
+            "CRITICAL: always include \"tool_call\" and \"name\". NEVER reply with only "
+            'the arguments — e.g. NEVER just {"query": "..."} with no name field.',
             "You will then receive the tool's result and may call another tool or answer.",
             "When you have enough information, reply to the user normally, WITHOUT any JSON.",
             "Only use the tools listed above, with the exact argument names shown.",
