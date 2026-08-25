@@ -18,6 +18,11 @@ from whatsapp import MEDIA_DIR, save_upload, send_media, send_text
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin")
 
+# wa_settings keys rendered as type="password" in settings.html — the template
+# never re-populates these with the stored value, so an empty submission means
+# "unchanged", not "clear it". Extend this set if more password fields are added.
+_PASSWORD_SETTING_KEYS = {"ai_api_key"}
+
 security = HTTPBasic()
 templates = Jinja2Templates(directory="templates")
 router = APIRouter()
@@ -339,6 +344,12 @@ async def save_settings(
     form = await request.form()
     for key, value in form.items():
         if key.startswith("_"):
+            continue
+        # Password-type fields (e.g. ai_api_key) are never re-populated in the
+        # rendered form, so the browser always submits them empty unless the
+        # user actually retyped a new value. Skip a blank submission so saving
+        # any OTHER field on the same form doesn't silently wipe the secret.
+        if key in _PASSWORD_SETTING_KEYS and not value:
             continue
         r = await db.execute(select(Setting).where(Setting.key == key))
         setting = r.scalar_one_or_none()
