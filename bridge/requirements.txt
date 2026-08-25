@@ -26,7 +26,3 @@ edge-tts>=7.0.0
 
 # SSH tool
 asyncssh==2.14.2
-
-# Observability
-prometheus-client==0.20.0
-prometheus-fastapi-instrumentator==7.0.0

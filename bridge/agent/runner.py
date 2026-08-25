@@ -14,12 +14,10 @@ from __future__ import annotations
 import json
 import logging
 import re
-import time
 from dataclasses import dataclass, field
 
 from openai import AsyncOpenAI
 
-import metrics
 from agent import confidence as conf_module
 from agent.language import detect as detect_lang, instruction as lang_instruction
 from agent.tools.base import Tool
@@ -218,7 +216,6 @@ class AgentRunner:
                 break
 
             sc, reason = await conf_module.score(self.client, self.model, user_message, result_text)
-            metrics.confidence_score.observe(sc)
             final_confidence = sc
             if sc >= self.confidence_threshold:
                 final_content = result_text
@@ -229,7 +226,6 @@ class AgentRunner:
                 sc, self.confidence_threshold, attempt + 1, self.confidence_max_retries + 1, reason,
             )
             if attempt < self.confidence_max_retries:
-                metrics.confidence_retries_total.inc()
                 # Feed the low-confidence result back and retry
                 messages.append({"role": "assistant", "content": result_text})
                 messages.append({
@@ -273,13 +269,9 @@ class AgentRunner:
                 kwargs["tools"] = tools_schema
                 kwargs["tool_choice"] = "auto"
 
-            llm_start = time.monotonic()
             try:
                 response = await self.client.chat.completions.create(**kwargs)
-                metrics.llm_call_duration_seconds.labels(model=self.model).observe(time.monotonic() - llm_start)
             except Exception as exc:
-                metrics.llm_call_duration_seconds.labels(model=self.model).observe(time.monotonic() - llm_start)
-                metrics.llm_call_errors_total.labels(error_type=type(exc).__name__).inc()
                 logger.error("LLM call failed: %s", exc)
                 # Raise rather than return a fabricated "answer" — a failed call
                 # must never be confidence-scored or sent to the user as content.
@@ -338,18 +330,11 @@ class AgentRunner:
         tool = self.tools.get(name)
         if not tool:
             return f"Error: tool '{name}' not found."
-        start = time.monotonic()
         try:
             args = json.loads(arguments_json) if arguments_json else {}
             result = await tool.run(**args)
-            metrics.tool_call_duration_seconds.labels(tool_name=name).observe(time.monotonic() - start)
-            metrics.tool_calls_total.labels(
-                tool_name=name, status="success" if result.success else "error"
-            ).inc()
             return str(result)
         except Exception as exc:
-            metrics.tool_call_duration_seconds.labels(tool_name=name).observe(time.monotonic() - start)
-            metrics.tool_calls_total.labels(tool_name=name, status="error").inc()
             logger.error("Tool %s raised: %s", name, exc)
             return f"Tool error: {exc}"
 

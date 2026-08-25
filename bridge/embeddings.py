@@ -10,11 +10,8 @@ import json
 import logging
 import math
 import os
-import time
 
 import httpx
-
-import metrics
 
 logger = logging.getLogger("bridge.embeddings")
 
@@ -56,7 +53,6 @@ async def _post_with_retry(
             retryable = status is None or status in _RETRYABLE_STATUS
             if attempt == MAX_RETRIES - 1 or not retryable:
                 raise
-            metrics.embedding_retries_total.inc()
             logger.debug("Embedding POST retry %d (status=%s) in %.0fs", attempt + 1, status, delay)
             await asyncio.sleep(delay)
             delay *= 2
@@ -67,9 +63,7 @@ async def _post_with_retry(
 async def embed(text: str) -> list[float] | None:
     """Call the embeddings API and return a float vector."""
     if not EMBEDDING_URL or not text.strip():
-        metrics.embedding_requests_total.labels(status="no_url").inc()
         return None
-    start = time.monotonic()
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             if EMBEDDING_API == "ollama":
@@ -77,23 +71,18 @@ async def embed(text: str) -> list[float] | None:
                 payload = {"model": EMBEDDING_MODEL, "input": text[:8000]}
                 headers = {"Content-Type": "application/json"}
                 r = await _post_with_retry(client, url, payload, headers)
-                vec = r.json()["embeddings"][0]
-            else:
-                # OpenAI-compatible transport
-                url = EMBEDDING_URL.rstrip("/") + "/embeddings"
-                headers = {
-                    "Authorization": f"Bearer {EMBEDDING_API_KEY}",
-                    "Content-Type": "application/json",
-                }
-                payload = {"model": EMBEDDING_MODEL, "input": text[:8000]}
-                r = await _post_with_retry(client, url, payload, headers)
-                vec = r.json()["data"][0]["embedding"]
-        metrics.embedding_duration_seconds.observe(time.monotonic() - start)
-        metrics.embedding_requests_total.labels(status="success").inc()
-        return vec
+                return r.json()["embeddings"][0]
+
+            # OpenAI-compatible transport
+            url = EMBEDDING_URL.rstrip("/") + "/embeddings"
+            headers = {
+                "Authorization": f"Bearer {EMBEDDING_API_KEY}",
+                "Content-Type": "application/json",
+            }
+            payload = {"model": EMBEDDING_MODEL, "input": text[:8000]}
+            r = await _post_with_retry(client, url, payload, headers)
+            return r.json()["data"][0]["embedding"]
     except Exception as exc:
-        metrics.embedding_duration_seconds.observe(time.monotonic() - start)
-        metrics.embedding_requests_total.labels(status="failure").inc()
         logger.debug("Embedding failed (non-fatal): %s", exc)
         return None
 

@@ -1,7 +1,4 @@
 version: '3.9'
-# Pinned so Promtail's Docker-label filter (com.docker.compose.project) stays
-# deterministic regardless of the checkout directory name on any given host.
-name: wa_agent
 
 services:
   postgres:
@@ -281,161 +278,12 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # ---------------------------------------------------------------------------
-  # Observability — Prometheus (metrics), Grafana (dashboards), Loki/Promtail
-  # (logs), scoped to THIS project only. Only Grafana is published to the host
-  # (like pgAdmin); Prometheus/Loki have no auth so stay inside wa-network.
-  # NOTE: the wget-based healthchecks below assume BusyBox/Alpine-based images
-  # (typical for the Prometheus ecosystem) — verify `wget` exists in each image
-  # during rollout; drop the healthcheck for any image where it's missing.
-  # ---------------------------------------------------------------------------
-  prometheus:
-    image: prom/prometheus:latest
-    command:
-      - --config.file=/etc/prometheus/prometheus.yml
-      - --storage.tsdb.path=/prometheus
-      - --storage.tsdb.retention.time=15d
-    volumes:
-      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - prometheus_data:/prometheus
-    networks:
-      - wa-network
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9090/-/healthy"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 15s
-    mem_limit: 512m
-    cpus: 0.5
-    restart: unless-stopped
-
-  blackbox-exporter:
-    image: prom/blackbox-exporter:latest
-    volumes:
-      - ./observability/blackbox/blackbox.yml:/etc/blackbox_exporter/config.yml:ro
-    networks:
-      - wa-network
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9115/"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-    mem_limit: 64m
-    restart: unless-stopped
-
-  postgres-exporter:
-    image: quay.io/prometheuscommunity/postgres-exporter:latest
-    environment:
-      DATA_SOURCE_NAME: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-evolution}?sslmode=disable
-    networks:
-      - wa-network
-    depends_on:
-      postgres:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9187/"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-    mem_limit: 64m
-    restart: unless-stopped
-
-  redis-exporter:
-    image: oliver006/redis_exporter:latest
-    environment:
-      REDIS_ADDR: redis://redis:6379
-      REDIS_PASSWORD: ${REDIS_PASSWORD}
-    networks:
-      - wa-network
-    depends_on:
-      redis:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9121/"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-    mem_limit: 64m
-    restart: unless-stopped
-
-  loki:
-    image: grafana/loki:latest
-    command: -config.file=/etc/loki/loki-config.yml
-    volumes:
-      - ./observability/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
-      - loki_data:/loki
-    networks:
-      - wa-network
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3100/ready"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 15s
-    mem_limit: 256m
-    cpus: 0.5
-    restart: unless-stopped
-
-  promtail:
-    image: grafana/promtail:latest
-    command: -config.file=/etc/promtail/promtail-config.yml
-    volumes:
-      - ./observability/promtail/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-    networks:
-      - wa-network
-    depends_on:
-      - loki
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9080/ready"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-    mem_limit: 128m
-    cpus: 0.3
-    restart: unless-stopped
-
-  grafana:
-    image: grafana/grafana:latest
-    ports:
-      - "5023:3000"
-    environment:
-      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-changeme}
-      GF_USERS_ALLOW_SIGN_UP: "false"
-      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://192.168.100.62:5023}
-    volumes:
-      - grafana_data:/var/lib/grafana
-      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
-    networks:
-      - wa-network
-    depends_on:
-      - prometheus
-      - loki
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3000/api/health"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
-      start_period: 15s
-    mem_limit: 256m
-    cpus: 0.5
-    restart: unless-stopped
-
 volumes:
   postgres_data:
   redis_data:
   evolution_instances:
   pgadmin_data:
   media_data:
-  prometheus_data:
-  grafana_data:
-  loki_data:
 
 networks:
   wa-network:

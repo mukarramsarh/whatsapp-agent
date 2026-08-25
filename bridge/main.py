@@ -2,16 +2,13 @@ import asyncio
 import json
 import logging
 import os
-import time
 from contextlib import asynccontextmanager
 
 import httpx
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
-from prometheus_fastapi_instrumentator import Instrumentator
 from sqlalchemy import select
 
-import metrics
 from database import AsyncSessionLocal, Message, Setting, ToolConfig, UserRole, User, init_db
 from admin import router as admin_router
 from whatsapp import MEDIA_DIR, MEDIA_MESSAGE_KEYS, download_and_save, send_media, send_text
@@ -79,7 +76,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="WhatsApp AI Agent — Bridge", version="2.0.0", lifespan=lifespan)
 app.include_router(admin_router)
-Instrumentator().instrument(app).expose(app, endpoint="/metrics", include_in_schema=False)
 
 
 # ---------------------------------------------------------------------------
@@ -196,7 +192,6 @@ async def _run_agent_pipeline(
     """Full ReAct pipeline: context → agent → confidence → reply."""
     from agent.runner import AgentRunner
 
-    pipeline_start = time.monotonic()
     settings = await _load_settings()
     tools = await _load_tools(settings)
     role_prompt = await _get_role_prompt(user.role)
@@ -243,9 +238,6 @@ async def _run_agent_pipeline(
         else:
             logger.info("Voice reply skipped — TTS unavailable; text already sent.")
 
-    metrics.messages_total.labels(direction="outbound").inc()
-    metrics.agent_pipeline_duration_seconds.observe(time.monotonic() - pipeline_start)
-
     # Persist outbound message (store what the user actually saw)
     out_id = await _store_message(user.id, reply_text, None, "outbound", "sent")
     asyncio.create_task(_embed_message(out_id, reply_text, number, "outbound"))
@@ -275,7 +267,6 @@ async def process_webhook(payload: dict) -> None:
 
     remote_jid: str = key.get("remoteJid", "")
     if "@g.us" in remote_jid:
-        metrics.messages_ignored_total.labels(reason="group").inc()
         return  # ignore groups
 
     number = remote_jid.replace("@s.whatsapp.net", "").replace("@c.us", "")
@@ -300,7 +291,6 @@ async def process_webhook(payload: dict) -> None:
 
     if not user.allowed:
         logger.info("Number %s not allowed — ignoring.", number)
-        metrics.messages_ignored_total.labels(reason="not_allowed").inc()
         return
 
     # --- Download media ---
@@ -338,10 +328,7 @@ async def process_webhook(payload: dict) -> None:
     # --- Skip agent if no usable content ---
     if not text and not attachment_meta:
         logger.info("No text or media — nothing to process.")
-        metrics.messages_ignored_total.labels(reason="no_content").inc()
         return
-
-    metrics.messages_total.labels(direction="inbound").inc()
 
     # --- Run agent pipeline ---
     await _run_agent_pipeline(
