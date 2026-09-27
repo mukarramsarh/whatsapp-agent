@@ -1,7 +1,9 @@
 # Core framework
 fastapi==0.141.1
 uvicorn[standard]==0.53.0
-httpx==0.28.1
+# pinned <0.28: httpx 0.28 dropped the `proxies` kwarg that openai==1.35.0
+# still passes into its internal httpx client construction (TypeError at boot).
+httpx==0.27.2
 python-dotenv==1.0.1
 python-multipart==0.0.9
 
