@@ -94,7 +94,7 @@ async def admin_users(
     roles_result = await db.execute(select(UserRole).order_by(UserRole.name))
     roles = roles_result.scalars().all()
     return templates.TemplateResponse(
-        "users.html", {"request": request, "users": users, "roles": roles, "error": error}
+        request, "users.html", {"users": users, "roles": roles, "error": error}
     )
 
 
@@ -222,9 +222,9 @@ async def admin_messages(
     conversations = list(convos.values())
 
     return templates.TemplateResponse(
+        request,
         "messages.html",
         {
-            "request": request,
             "conversations": conversations,
             "users": users,
             "statuses": statuses,
@@ -266,8 +266,9 @@ async def admin_conversation(
     ]
 
     return templates.TemplateResponse(
+        request,
         "conversation.html",
-        {"request": request, "user": user, "messages": messages},
+        {"user": user, "messages": messages},
     )
 
 
@@ -330,8 +331,9 @@ async def admin_settings(
         categories.setdefault(s.category, []).append(s)
 
     return templates.TemplateResponse(
+        request,
         "settings.html",
-        {"request": request, "settings": settings, "categories": categories, "roles": roles},
+        {"settings": settings, "categories": categories, "roles": roles},
     )
 
 
@@ -391,7 +393,7 @@ async def admin_tools(
 ):
     result = await db.execute(select(ToolConfig).order_by(ToolConfig.name))
     tools = result.scalars().all()
-    return templates.TemplateResponse("tools.html", {"request": request, "tools": tools})
+    return templates.TemplateResponse(request, "tools.html", {"tools": tools})
 
 
 @router.post("/tools/{name}/toggle")
