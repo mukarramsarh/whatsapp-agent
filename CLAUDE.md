@@ -180,7 +180,8 @@ TTS_VOICE_AR=ar-SA-HamedNeural
 ## Key technical decisions & gotchas
 
 ### Evolution API
-- Version: v2.3.7 (evoapicloud/evolution-api:latest)
+- Version: v2.3.7 — image is pinned to `evoapicloud/evolution-api:v2.3.7` in `docker-compose.yml` (both `db-migrate` and `evolution-api` services). **Do not switch to `:latest`.**
+- Starting with v2.4.0, the maintainer (now `evolution-foundation`) requires every instance to activate against their licensing server on boot (unlicensed instances get `503 LICENSE_REQUIRED`). Upgrading past v2.3.x is a deliberate decision (accept licensing or migrate to WAHA/WPPConnect), not a routine version bump.
 - Webhook payload MUST be nested under `"webhook"` key — older format fails with 400
 - Instance name: `STC` — mismatch causes 404 on all API calls
 - JID format: `923124277939@s.whatsapp.net` — **no leading `+`** (breaks Evolution API with 400)
