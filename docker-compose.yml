@@ -238,6 +238,12 @@ services:
       WHISPER_MODEL: ${WHISPER_MODEL:-base}
       TTS_VOICE_EN: ${TTS_VOICE_EN:-en-US-JennyNeural}
       TTS_VOICE_AR: ${TTS_VOICE_AR:-ar-SA-HamedNeural}
+      # Cortex WhatsApp gateway (cortex-whatsapp-gateway repo) — reachable
+      # directly by container name since bridge now shares cortex-internal
+      # with it. Not yet consumed by any tool code; wiring a tool to call
+      # this is a separate change (see that repo's README).
+      CORTEX_GATEWAY_URL: ${CORTEX_GATEWAY_URL:-http://cortex-whatsapp-gateway:8080}
+      CORTEX_GATEWAY_API_KEY: ${CORTEX_GATEWAY_API_KEY:-}
     # Lets the container reach DGX services bound on the host via
     # http://host.docker.internal:<port> (alternative to the LAN IP above).
     extra_hosts:
@@ -246,6 +252,7 @@ services:
       - media_data:/app/media
     networks:
       - wa-network
+      - cortex-internal
     depends_on:
       postgres:
         condition: service_healthy
@@ -288,3 +295,10 @@ volumes:
 networks:
   wa-network:
     driver: bridge
+  # The Cortex stack's own network (server-snap-august-19-2026's
+  # docker-compose.yml) — created by that stack, not this one. Lets `bridge`
+  # reach cortex-hub-fronted services via cortex-whatsapp-gateway by
+  # container name. Requires cortex-whatsapp-gateway (and Cortex itself) to
+  # already be running on this same Docker host.
+  cortex-internal:
+    external: true
