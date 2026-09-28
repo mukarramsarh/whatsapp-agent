@@ -44,9 +44,14 @@ class CortexSearchTool(Tool):
 
             result = await cortex_gateway.search_and_wait(query, pathway=pathway)
             if result is None:
-                return ToolResult(success=False, error="Cortex e-library search timed out.")
+                # Covers both a submit failure (bad gateway auth, gateway down,
+                # network) and a poll timeout — see the bridge.cortex_gateway
+                # log line right above this tool's error for the real reason.
+                return ToolResult(
+                    success=False, output="", error="Cortex e-library search failed or timed out."
+                )
             if result.get("status") == "error":
-                return ToolResult(success=False, error=result.get("error", "search failed"))
+                return ToolResult(success=False, output="", error=result.get("error", "search failed"))
 
             answer = result.get("answer", "").strip()
             sources = result.get("sources", [])
@@ -59,4 +64,4 @@ class CortexSearchTool(Tool):
             return ToolResult(success=True, output=output)
         except Exception as exc:
             logger.error("Cortex e-library search error: %s", exc)
-            return ToolResult(success=False, error=str(exc))
+            return ToolResult(success=False, output="", error=str(exc))
