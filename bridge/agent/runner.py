@@ -20,7 +20,7 @@ from openai import AsyncOpenAI
 
 from agent import confidence as conf_module
 from agent.language import detect as detect_lang, instruction as lang_instruction
-from agent.tools.base import Tool
+from agent.tools.base import Tool, ToolResult, ToolSession
 
 logger = logging.getLogger("bridge.agent")
 
@@ -141,6 +141,11 @@ class AgentResult:
     tool_calls_made: list[str] = field(default_factory=list)
     confidence: float = 1.0
     iterations: int = 0
+    # Set when a tool this request returned a file (e.g. a generated RFP PDF)
+    # — main.py's reply step sends this via send_media after the text reply.
+    attachment_bytes: bytes | None = None
+    attachment_name: str | None = None
+    attachment_mime: str | None = None
 
 
 class AgentRunner:
@@ -187,6 +192,7 @@ class AgentRunner:
         role_prompt: str,
         language: str,
         attachment_meta: dict | None = None,
+        session: ToolSession | None = None,
     ) -> AgentResult:
         system_prompt = self._build_system(role_prompt, language)
         # Native mode sends the OpenAI tools schema; prompt mode describes the
@@ -211,6 +217,7 @@ class AgentRunner:
         final_content = ""
         final_confidence = 1.0
         final_iterations = 0
+        final_attachment: tuple[bytes, str, str] | None = None
         connection_failures = 0
 
         # The outer loop bound must cover whichever retry budget is larger, so
@@ -221,8 +228,8 @@ class AgentRunner:
         for attempt in range(max_attempts):
             attempt_messages = list(messages)
             try:
-                result_text, calls, iterations = await self._react_loop(
-                    attempt_messages, tools_schema
+                result_text, calls, iterations, attachment = await self._react_loop(
+                    attempt_messages, tools_schema, session
                 )
             except LLMCallError as exc:
                 # The call itself failed — never confidence-score or ship this as
@@ -244,6 +251,7 @@ class AgentRunner:
 
             tool_calls_made.extend(calls)
             final_iterations = iterations
+            final_attachment = attachment
 
             if not self.confidence_enabled:
                 final_content = result_text
@@ -278,12 +286,16 @@ class AgentRunner:
                 final_content = result_text
                 break
 
+        attachment_bytes, attachment_name, attachment_mime = final_attachment or (None, None, None)
         return AgentResult(
             content=final_content or "I'm sorry, I couldn't generate a response.",
             language=language,
             tool_calls_made=tool_calls_made,
             confidence=final_confidence,
             iterations=final_iterations,
+            attachment_bytes=attachment_bytes,
+            attachment_name=attachment_name,
+            attachment_mime=attachment_mime,
         )
 
     # ------------------------------------------------------------------
@@ -294,10 +306,15 @@ class AgentRunner:
         self,
         messages: list[dict],
         tools_schema: list[dict],
-    ) -> tuple[str, list[str], int]:
-        """Run the Reason-Act loop. Returns (final_text, tool_names_used, iterations)."""
+        session: ToolSession | None = None,
+    ) -> tuple[str, list[str], int, tuple[bytes, str, str] | None]:
+        """Run the Reason-Act loop.
+        Returns (final_text, tool_names_used, iterations, attachment) —
+        attachment is (file_bytes, file_name, file_mime) from the first tool
+        result this request that set one, or None."""
         tool_calls_made: list[str] = []
         nudged_to_reconsider = False
+        captured_attachment: tuple[bytes, str, str] | None = None
 
         for iteration in range(self.max_iterations):
             kwargs: dict = {
@@ -335,7 +352,13 @@ class AgentRunner:
                 for tc in choice.message.tool_calls:
                     fn_name = tc.function.name
                     tool_calls_made.append(fn_name)
-                    tool_result = await self._execute_tool(fn_name, tc.function.arguments)
+                    tool_result = await self._execute_tool(fn_name, tc.function.arguments, session)
+                    if captured_attachment is None and tool_result.file_bytes:
+                        captured_attachment = (
+                            tool_result.file_bytes,
+                            tool_result.file_name or "file",
+                            tool_result.file_mime or "application/octet-stream",
+                        )
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
@@ -353,7 +376,13 @@ class AgentRunner:
                 if call:
                     name, args = call
                     tool_calls_made.append(name)
-                    tool_result = await self._execute_tool(name, json.dumps(args))
+                    tool_result = await self._execute_tool(name, json.dumps(args), session)
+                    if captured_attachment is None and tool_result.file_bytes:
+                        captured_attachment = (
+                            tool_result.file_bytes,
+                            tool_result.file_name or "file",
+                            tool_result.file_mime or "application/octet-stream",
+                        )
                     messages.append({"role": "assistant", "content": content})
                     messages.append({
                         "role": "user",
@@ -391,26 +420,27 @@ class AgentRunner:
                 continue
 
             # Final answer
-            return content, tool_calls_made, iteration + 1
+            return content, tool_calls_made, iteration + 1, captured_attachment
 
         # Exhausted iterations — return whatever the last assistant message was
         last_assistant = next(
             (m.get("content", "") for m in reversed(messages) if m.get("role") == "assistant"),
             "I'm sorry, I couldn't complete the task within the allowed steps.",
         )
-        return last_assistant, tool_calls_made, self.max_iterations
+        return last_assistant, tool_calls_made, self.max_iterations, captured_attachment
 
-    async def _execute_tool(self, name: str, arguments_json: str) -> str:
+    async def _execute_tool(
+        self, name: str, arguments_json: str, session: ToolSession | None = None
+    ) -> ToolResult:
         tool = self.tools.get(name)
         if not tool:
-            return f"Error: tool '{name}' not found."
+            return ToolResult(success=False, output="", error=f"tool '{name}' not found.")
         try:
             args = json.loads(arguments_json) if arguments_json else {}
-            result = await tool.run(**args)
-            return str(result)
+            return await tool.run(**args, session=session)
         except Exception as exc:
             logger.error("Tool %s raised: %s", name, exc)
-            return f"Tool error: {exc}"
+            return ToolResult(success=False, output="", error=str(exc))
 
     def _tool_protocol_prompt(self) -> str:
         """System-prompt block describing the tools and the JSON call envelope
@@ -464,6 +494,17 @@ class AgentRunner:
                 '"arguments": {"query": "standard project methodology", "pathway": "technical"}}}',
             ]
         lines += [
+            "",
+            "--- Missing information ---",
+            "If a tool needs a required argument you don't have yet (a file the "
+            "user hasn't attached, a required choice, a required detail they "
+            "haven't given), do NOT call the tool with a guessed or empty value. "
+            "Instead reply normally (no JSON) with a specific question asking for "
+            "exactly what's missing — for a required choice with a fixed list of "
+            "options, present those options plainly so the user can pick one. "
+            "If the user's next message looks like it's answering a question you "
+            "just asked, combine it with anything relevant from earlier in this "
+            "conversation and then call the tool — don't ask again from scratch.",
             "",
             "You will then receive the tool's result and may call another tool or answer.",
             "When you have enough information, reply to the user normally, WITHOUT any JSON.",

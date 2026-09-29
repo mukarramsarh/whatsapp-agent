@@ -191,6 +191,7 @@ async def _run_agent_pipeline(
 ) -> None:
     """Full ReAct pipeline: context → agent → confidence → reply."""
     from agent.runner import AgentRunner
+    from agent.tools.base import ToolSession
 
     settings = await _load_settings()
     tools = await _load_tools(settings)
@@ -216,6 +217,7 @@ async def _run_agent_pipeline(
         role_prompt=role_prompt,
         language=language,
         attachment_meta=agent_attachment,
+        session=ToolSession(remote_jid=remote_jid),
     )
 
     # Convert the model's Markdown into WhatsApp-safe formatting before sending.
@@ -237,6 +239,18 @@ async def _run_agent_pipeline(
             await send_media(remote_jid, audio, "audio/mpeg", "reply.mp3")
         else:
             logger.info("Voice reply skipped — TTS unavailable; text already sent.")
+
+    # A tool this turn (e.g. generate_tender) may have produced a real file
+    # (a PDF, a .pptx) — deliver it as its own WhatsApp document after the
+    # text reply.
+    if result.attachment_bytes:
+        await send_media(
+            remote_jid,
+            result.attachment_bytes,
+            result.attachment_mime or "application/octet-stream",
+            result.attachment_name or "file",
+        )
+        logger.info("Sent tool attachment: %s (%d bytes)", result.attachment_name, len(result.attachment_bytes))
 
     # Persist outbound message (store what the user actually saw)
     out_id = await _store_message(user.id, reply_text, None, "outbound", "sent")
