@@ -9,6 +9,8 @@ from agent.tools.ssh import SSHTool
 from agent.tools.http_api import HTTPAPITool
 from agent.tools.library import LibraryTool
 from agent.tools.cortex_search import CortexSearchTool
+from agent.tools.classify import ClassifyDocumentTool
+from agent.tools.cortex_ocr import CortexOcrTool
 
 # Ordered list of all tool classes
 ALL_TOOL_CLASSES: list[type[Tool]] = [
@@ -18,6 +20,8 @@ ALL_TOOL_CLASSES: list[type[Tool]] = [
     HTTPAPITool,
     LibraryTool,
     CortexSearchTool,
+    ClassifyDocumentTool,
+    CortexOcrTool,
 ]
 
 __all__ = ["Tool", "ToolResult", "ALL_TOOL_CLASSES"]
