@@ -17,18 +17,48 @@ _SCORE_SYSTEM = (
 
 _SCORE_USER = "Query: {query}\n\nResponse: {response}"
 
+_SCORE_USER_WITH_TOOLS = (
+    "Query: {query}\n\n"
+    "Response: {response}\n\n"
+    "Tools available to the assistant: {available}\n"
+    "Tools actually used to produce this response: {used}\n"
+    "If the response makes factual or specific claims that should have been "
+    "verified via one of the available tools but none was used, treat that as "
+    "a real accuracy concern and lower the score accordingly."
+)
 
-async def score(client, model: str, query: str, response: str) -> tuple[float, str]:
+
+async def score(
+    client,
+    model: str,
+    query: str,
+    response: str,
+    available_tools: list[str] | None = None,
+    tools_used: list[str] | None = None,
+) -> tuple[float, str]:
     """
     Returns (confidence_score, reason).
     Score is 0.0-1.0. Returns (1.0, '') on any failure so the system doesn't block.
+
+    available_tools/tools_used are optional — when given, the evaluator also
+    judges whether a tool should have been used but wasn't, instead of only
+    judging whether the text sounds plausible on its own.
     """
     try:
+        if available_tools:
+            user_prompt = _SCORE_USER_WITH_TOOLS.format(
+                query=query,
+                response=response,
+                available=", ".join(available_tools),
+                used=", ".join(tools_used or []) or "none",
+            )
+        else:
+            user_prompt = _SCORE_USER.format(query=query, response=response)
         result = await client.chat.completions.create(
             model=model,
             messages=[
                 {"role": "system", "content": _SCORE_SYSTEM},
-                {"role": "user", "content": _SCORE_USER.format(query=query, response=response)},
+                {"role": "user", "content": user_prompt},
             ],
             temperature=0,
             max_tokens=150,

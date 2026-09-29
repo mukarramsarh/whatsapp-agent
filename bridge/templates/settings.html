@@ -77,6 +77,24 @@
         </p>
       </div>
 
+      <!-- Nudge to reconsider tool use -->
+      <div class="flex items-center justify-between">
+        <div>
+          <p class="text-sm font-medium text-slate-700">Require Tool Check</p>
+          <p class="text-xs text-slate-400">If the model answers immediately with no tool called, give it one bounded chance to reconsider first</p>
+        </div>
+        {% set tool_check = settings.get('agent_require_tool_check', {}).value == 'true' if settings.get('agent_require_tool_check') else true %}
+        <label class="relative inline-flex items-center cursor-pointer">
+          <input type="checkbox" name="agent_require_tool_check" value="true"
+                 {% if tool_check %}checked{% endif %}
+                 onchange="document.getElementById('tool_check_hidden').value = this.checked ? 'true' : 'false'"
+                 class="sr-only peer">
+          <input type="hidden" id="tool_check_hidden" name="agent_require_tool_check"
+                 value="{{ 'true' if tool_check else 'false' }}">
+          <div class="w-11 h-6 bg-slate-200 peer-focus:ring-2 peer-focus:ring-wa rounded-full peer peer-checked:bg-wa transition-colors after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:after:translate-x-5"></div>
+        </label>
+      </div>
+
       <div class="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
         <p class="text-xs text-slate-500">
           Embeddings (vector search) are configured via the

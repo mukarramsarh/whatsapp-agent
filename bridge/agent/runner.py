@@ -163,6 +163,10 @@ class AgentRunner:
         # "native" = OpenAI tool_calls; "prompt" = JSON-envelope parsed by the bridge.
         self.tool_mode = settings.get("agent_tool_mode", "prompt").lower()
         self.max_iterations = int(settings.get("agent_max_iterations", "10"))
+        # If the model answers immediately with zero tools called, give it one
+        # bounded chance to reconsider before accepting that as final — see
+        # _react_loop(). Never adds more than one extra iteration.
+        self.require_tool_check = settings.get("agent_require_tool_check", "true").lower() == "true"
         self.confidence_enabled = settings.get("confidence_enabled", "false").lower() == "true"
         self.confidence_threshold = float(settings.get("confidence_threshold", "0.7"))
         self.confidence_max_retries = int(settings.get("confidence_max_retries", "2"))
@@ -245,7 +249,11 @@ class AgentRunner:
                 final_content = result_text
                 break
 
-            sc, reason = await conf_module.score(self.client, self.model, user_message, result_text)
+            sc, reason = await conf_module.score(
+                self.client, self.model, user_message, result_text,
+                available_tools=list(self.tools.keys()),
+                tools_used=tool_calls_made,
+            )
             final_confidence = sc
             if sc >= self.confidence_threshold:
                 final_content = result_text
@@ -289,6 +297,7 @@ class AgentRunner:
     ) -> tuple[str, list[str], int]:
         """Run the Reason-Act loop. Returns (final_text, tool_names_used, iterations)."""
         tool_calls_made: list[str] = []
+        nudged_to_reconsider = False
 
         for iteration in range(self.max_iterations):
             kwargs: dict = {
@@ -356,6 +365,31 @@ class AgentRunner:
                     logger.info("Prompt-tool %s executed → %d chars output", name, len(str(tool_result)))
                     continue
 
+            # Bounded safety net: the model answered immediately with zero
+            # tools called this whole request. Give it exactly one chance to
+            # reconsider — nudged_to_reconsider guarantees this can never fire
+            # twice, so it never adds more than one extra iteration/latency hit.
+            if (
+                self.require_tool_check
+                and not nudged_to_reconsider
+                and not tool_calls_made
+                and self.tools
+                and content
+            ):
+                nudged_to_reconsider = True
+                messages.append({"role": "assistant", "content": content})
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "[System note: before finalizing — is there a tool above that "
+                        "could verify or source this answer more accurately than your "
+                        "own general knowledge? If yes, call it now. If this is a "
+                        "greeting, small talk, or something no tool covers, just "
+                        "confirm that and repeat your answer.]"
+                    ),
+                })
+                continue
+
             # Final answer
             return content, tool_calls_made, iteration + 1
 
@@ -385,18 +419,52 @@ class AgentRunner:
             return ""
         lines = [
             "--- Available Tools ---",
-            "You can call tools to gather information before answering.",
+            "Before answering ANY question that is factual, seeks specific "
+            "information, or could be answered more accurately by looking "
+            "something up (knowledge-base questions, document/contract/tender "
+            "lookups, OCR, database queries, etc.), you MUST check the tools "
+            "below and call the matching one instead of answering from your "
+            "own general knowledge. Only skip tools for greetings, small talk, "
+            "or requests nothing below covers.",
+            "",
         ]
         for t in self.tools.values():
-            props = (t.parameters_schema or {}).get("properties", {})
-            params = ", ".join(f"{k}: {v.get('type', 'any')}" for k, v in props.items())
+            schema = t.parameters_schema or {}
+            props = schema.get("properties", {})
+            required = set(schema.get("required", []))
+            param_parts = []
+            for k, v in props.items():
+                detail = v.get("type", "any")
+                if "enum" in v:
+                    detail += f", one of {v['enum']!r}"
+                if k in required:
+                    detail += ", required"
+                elif "default" in v:
+                    detail += f", default {v['default']!r}"
+                param_parts.append(f"{k} ({detail})")
+            params = ", ".join(param_parts)
             lines.append(f"- {t.name}({params}) — {t.description}")
         lines += [
             "",
             "To call a tool, reply with ONLY this JSON object and nothing else:",
             '{"tool_call": {"name": "<tool_name>", "arguments": {<args>}}}',
             "CRITICAL: always include \"tool_call\" and \"name\". NEVER reply with only "
-            'the arguments — e.g. NEVER just {"query": "..."} with no name field.',
+            'the arguments — e.g. NEVER just {"query": "..."} with no name field. '
+            "Use only the exact values shown above for any parameter with a fixed "
+            "list of options (e.g. an enum's exact listed choice, not a variant or "
+            "translation of it).",
+        ]
+        if "search_cortex_elibrary" in self.tools:
+            lines += [
+                "",
+                "Example — a knowledge question should trigger a tool call, not a "
+                "direct answer from memory:",
+                'User: "What is our standard project methodology?"',
+                'You: {"tool_call": {"name": "search_cortex_elibrary", '
+                '"arguments": {"query": "standard project methodology", "pathway": "technical"}}}',
+            ]
+        lines += [
+            "",
             "You will then receive the tool's result and may call another tool or answer.",
             "When you have enough information, reply to the user normally, WITHOUT any JSON.",
             "Only use the tools listed above, with the exact argument names shown.",

@@ -151,6 +151,7 @@ DEFAULT_SETTINGS: list[tuple[str, str, str, str]] = [
     ("llm_connection_max_retries", "1", "ai", "Fresh retries when the LLM call itself fails (connection/timeout) before giving up with an apology — separate from confidence retries"),
     ("agent_tool_mode",    _env_default("AGENT_TOOL_MODE", "prompt"),               "ai", "Tool calling: 'native' (server returns tool_calls) or 'prompt' (bridge parses a JSON envelope). Use 'prompt' if the LLM server does not parse tool calls."),
     ("agent_max_iterations", "10",                          "ai",         "Max ReAct tool-calling iterations per request"),
+    ("agent_require_tool_check", "true", "ai", "If the model answers immediately with no tool called, nudge it once to reconsider before accepting that as final. Never adds more than one extra iteration."),
     ("context_recent_count",  "20",   "context",  "Number of most-recent messages to include as context"),
     ("context_old_count",     "5",    "context",  "Number of historical (vector-retrieved) messages to include"),
     ("context_vector_count",  "5",    "context",  "Number of semantically similar messages to fetch via vector search"),
