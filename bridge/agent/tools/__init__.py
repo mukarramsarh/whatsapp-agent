@@ -12,6 +12,7 @@ from agent.tools.cortex_search import CortexSearchTool
 from agent.tools.classify import ClassifyDocumentTool
 from agent.tools.cortex_ocr import CortexOcrTool
 from agent.tools.analyze_rfp import AnalyzeRfpTool
+from agent.tools.generate_tender import GenerateTenderTool
 
 # Ordered list of all tool classes
 ALL_TOOL_CLASSES: list[type[Tool]] = [
@@ -24,6 +25,7 @@ ALL_TOOL_CLASSES: list[type[Tool]] = [
     ClassifyDocumentTool,
     CortexOcrTool,
     AnalyzeRfpTool,
+    GenerateTenderTool,
 ]
 
 __all__ = ["Tool", "ToolResult", "ALL_TOOL_CLASSES"]
