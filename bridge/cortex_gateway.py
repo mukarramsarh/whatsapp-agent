@@ -49,14 +49,20 @@ async def submit_json(path: str, payload: dict) -> str | None:
 
 
 async def submit_multipart(
-    path: str, file_bytes: bytes, filename: str, content_type: str = "application/octet-stream"
+    path: str,
+    file_bytes: bytes,
+    filename: str,
+    content_type: str = "application/octet-stream",
+    data: dict | None = None,
 ) -> str | None:
-    """POST a file to a submit endpoint. Returns job_id or None on error."""
+    """POST a file (plus optional extra form fields, e.g. BD analysis's
+    track/lang) to a submit endpoint. Returns job_id or None on error."""
     try:
         async with httpx.AsyncClient(timeout=60) as client:
             r = await client.post(
                 f"{CORTEX_GATEWAY_URL}{path}",
                 files={"file": (filename, file_bytes, content_type)},
+                data=data or {},
                 headers=_headers(),
             )
             r.raise_for_status()
