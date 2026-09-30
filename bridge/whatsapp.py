@@ -101,6 +101,34 @@ async def send_media(
         return False
 
 
+async def send_voice(jid: str, audio_bytes: bytes) -> bool:
+    """Send a real WhatsApp voice note (the native PTT bubble), not a
+    generic audio-file attachment. Evolution API's generic /sendMedia has no
+    way to request this -- ptt is hardcoded server-side and only reachable
+    via this separate /sendWhatsAppAudio endpoint (confirmed by reading
+    evolution-foundation/evolution-api's own source,
+    whatsapp.baileys.service.ts's audioWhatsapp(): it always sets
+    `ptt: true, mimetype: "audio/ogg; codecs=opus"`, and by default
+    (`encoding: true`, which we rely on here rather than overriding)
+    transcodes whatever audio it's given into that format itself -- so
+    edge-tts's MP3 output doesn't need to be converted on this end."""
+    jid = _clean_jid(jid)
+    url = f"{EVOLUTION_API_URL}/message/sendWhatsAppAudio/{INSTANCE_NAME}"
+    payload = {
+        "number": jid,
+        "audio": base64.b64encode(audio_bytes).decode(),
+    }
+    try:
+        async with httpx.AsyncClient(timeout=60) as client:
+            r = await client.post(url, json=payload, headers=_headers())
+            r.raise_for_status()
+        logger.info("Sent voice note to %s", jid)
+        return True
+    except Exception as exc:
+        logger.error("send_voice failed for %s: %s", jid, exc)
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Inbound media download
 # ---------------------------------------------------------------------------

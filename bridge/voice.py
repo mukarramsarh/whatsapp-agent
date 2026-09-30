@@ -56,9 +56,14 @@ async def transcribe(audio_path: Path, language: str | None = None) -> str | Non
     try:
         def _run():
             # Constrain to the two supported languages. Detect first; keep the
-            # result only if it is English or Arabic, otherwise force Arabic —
-            # Whisper otherwise mislabels Arabic as e.g. Hebrew (both RTL Semitic)
-            # and the reply comes back in the wrong language.
+            # result only if it is English or Arabic. Otherwise, DON'T just
+            # assume Arabic — that used to be the fallback (Whisper mislabels
+            # Arabic as e.g. Hebrew, both RTL Semitic), but the same "not
+            # en/ar" bucket also catches English misdetected as something
+            # else entirely (confirmed live: a clear English voice note came
+            # back detected=ur, and forcing Arabic on it produced a garbled,
+            # wrong-language transcript). Run BOTH forced passes and keep
+            # whichever one Whisper is actually more confident about.
             forced = language  # honour an explicit caller override if given
             if forced is None:
                 segs, info = model.transcribe(
@@ -72,9 +77,11 @@ async def transcribe(audio_path: Path, language: str | None = None) -> str | Non
                         audio_path.name, detected, len(text),
                     )
                     return text
-                # Not one of the two supported languages → redo as Arabic.
-                logger.info("Transcribed %s: detected=%s → forcing Arabic", audio_path.name, detected)
-                forced = "ar"
+                logger.info(
+                    "Transcribed %s: detected=%s (unsupported) — comparing forced en/ar",
+                    audio_path.name, detected,
+                )
+                return _best_of_forced(model, audio_path)
 
             segs, info = model.transcribe(
                 str(audio_path), beam_size=5, language=forced, vad_filter=True,
@@ -90,6 +97,32 @@ async def transcribe(audio_path: Path, language: str | None = None) -> str | Non
     except Exception as exc:
         logger.error("Transcription failed for %s: %s", audio_path, exc)
         return None
+
+
+def _best_of_forced(model, audio_path: Path) -> str:
+    """Transcribe forced as English and forced as Arabic, and keep whichever
+    Whisper is actually more confident about (mean per-segment avg_logprob,
+    less negative = better) instead of assuming ambiguous audio is always
+    Arabic. Costs a second transcription pass, but only for audio Whisper's
+    own language auto-detect couldn't confidently place in en/ar to begin
+    with — the common, cheap case (a single confident pass) is unaffected."""
+    best_text, best_lang, best_score = "", None, float("-inf")
+    for lang in ("en", "ar"):
+        try:
+            segs, _ = model.transcribe(str(audio_path), beam_size=5, language=lang, vad_filter=True)
+            segs = list(segs)
+        except Exception as exc:
+            logger.warning("Forced transcription (%s) failed: %s", lang, exc)
+            continue
+        if not segs:
+            continue
+        text = " ".join(s.text for s in segs).strip()
+        score = sum(getattr(s, "avg_logprob", 0.0) for s in segs) / len(segs)
+        logger.info("  forced=%s: avg_logprob=%.3f, %d chars", lang, score, len(text))
+        if score > best_score:
+            best_text, best_lang, best_score = text, lang, score
+    logger.info("Picked forced=%s (avg_logprob=%.3f)", best_lang, best_score)
+    return best_text
 
 
 # ---------------------------------------------------------------------------

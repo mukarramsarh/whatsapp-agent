@@ -11,7 +11,7 @@ from sqlalchemy import select
 
 from database import AsyncSessionLocal, Message, Setting, ToolConfig, UserRole, User, init_db
 from admin import router as admin_router
-from whatsapp import MEDIA_DIR, MEDIA_MESSAGE_KEYS, download_and_save, send_media, send_text
+from whatsapp import MEDIA_DIR, MEDIA_MESSAGE_KEYS, download_and_save, send_media, send_text, send_voice
 from wa_format import to_plain, to_whatsapp
 from agent.tools import ALL_TOOL_CLASSES
 import agent.context as ctx_builder
@@ -236,7 +236,7 @@ async def _run_agent_pipeline(
     if is_voice and voice_enabled:
         audio = await voice_module.synthesize(to_plain(reply_text), language)
         if audio:
-            await send_media(remote_jid, audio, "audio/mpeg", "reply.mp3")
+            await send_voice(remote_jid, audio)
         else:
             logger.info("Voice reply skipped — TTS unavailable; text already sent.")
 
