@@ -18,10 +18,13 @@ def detect(text: str) -> str:
 LANG_INSTRUCTION = {
     "ar": (
         "أجب باللغة العربية الفصحى (MSA) بأسلوب مهني ومهذب يناسب المستخدمين في المملكة العربية السعودية. "
-        "استخدم لغة واضحة ومحترمة، ويمكنك إبقاء المصطلحات التقنية والأرقام والأكواد بالإنجليزية عند الحاجة."
+        "استخدم لغة واضحة ومحترمة، ويمكنك إبقاء المصطلحات التقنية والأرقام والأكواد بالإنجليزية عند الحاجة. "
+        "(The user's CURRENT message is Arabic: answer in Arabic even if earlier messages were in English.)"
     ),
     "en": (
-        "Reply in English. Use clear, professional language."
+        "Reply in English. Use clear, professional language. "
+        "The user's CURRENT message is in English: answer in English even if earlier messages in this "
+        "conversation were in Arabic."
     ),
 }
 
