@@ -1,0 +1,270 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg15
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-evolution}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - wa-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    networks:
+      - wa-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  db-migrate:
+    image: evoapicloud/evolution-api:v2.3.7
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "=== db-migrate start ==="
+
+        # Overwrite the container's baked-in .env with correct DATABASE_URL.
+        # Prisma CLI loads .env from CWD before env vars, so we must write it.
+        # node's URL constructor URL-encodes special chars (@ # !) in the password.
+        node -e "
+          const u = new URL('postgresql://h:h@h/h');
+          u.username = process.env.POSTGRES_USER || 'postgres';
+          u.password = process.env.POSTGRES_PASSWORD || '';
+          u.hostname = process.env.POSTGRES_HOST || 'postgres';
+          u.port     = process.env.POSTGRES_PORT  || '5432';
+          u.pathname = '/' + (process.env.POSTGRES_DB || 'evolution');
+          require('fs').writeFileSync('.env', 'DATABASE_CONNECTION_URI=' + u.href + '\n');
+          console.log('DATABASE_URL written to .env (password hidden)');
+        "
+        if [ $$? -ne 0 ]; then echo "ERROR: failed to write .env"; exit 1; fi
+
+        # Copy migrations to where Prisma expects them
+        rm -rf ./prisma/migrations 2>/dev/null || true
+        cp -r ./prisma/postgresql-migrations ./prisma/migrations
+        if [ $$? -ne 0 ]; then
+          echo "ERROR: could not copy migrations"
+          ls -la ./prisma/ 2>/dev/null || echo "(prisma dir missing)"
+          exit 1
+        fi
+
+        echo "=== running prisma migrate deploy ==="
+        npx prisma migrate deploy --schema ./prisma/postgresql-schema.prisma > /tmp/migrate.log 2>&1
+        DEPLOY_EXIT=$$?
+        cat /tmp/migrate.log
+
+        if [ $$DEPLOY_EXIT -eq 0 ]; then
+          echo "=== db-migrate: done ==="
+          exit 0
+        fi
+
+        if grep -q "P3005" /tmp/migrate.log; then
+          echo "=== P3005 detected — baselining all migrations ==="
+          for d in prisma/postgresql-migrations/*/; do
+            n=$$(basename "$$d")
+            echo "  resolving: $$n"
+            npx prisma migrate resolve --applied "$$n" --schema ./prisma/postgresql-schema.prisma 2>&1 || true
+          done
+          echo "=== baseline complete — retrying migrate deploy ==="
+          npx prisma migrate deploy --schema ./prisma/postgresql-schema.prisma
+          exit $$?
+        fi
+
+        echo "=== db-migrate: unexpected failure (exit $$DEPLOY_EXIT) ==="
+        exit $$DEPLOY_EXIT
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-evolution}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      DATABASE_PROVIDER: postgresql
+    networks:
+      - wa-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  evolution-api:
+    image: evoapicloud/evolution-api:v2.3.7
+    environment:
+      # Server
+      SERVER_TYPE: http
+      SERVER_PORT: 8080
+      SERVER_URL: ${EVOLUTION_SERVER_URL:-http://localhost:5020}
+      # Telemetry
+      TELEMETRY: "false"
+      # CORS
+      CORS_ORIGIN: "*"
+      CORS_METHODS: "GET,POST,PUT,DELETE"
+      CORS_CREDENTIALS: "true"
+      # Logging
+      LOG_LEVEL: ERROR,WARN,INFO,LOG
+      LOG_COLOR: "true"
+      LOG_BAILEYS: error
+      DEL_INSTANCE: "false"
+      # Database
+      DATABASE_ENABLED: "true"
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-evolution}
+      DATABASE_CONNECTION_CLIENT_NAME: evolution_exchange
+      DATABASE_SAVE_DATA_INSTANCE: "true"
+      DATABASE_SAVE_DATA_NEW_MESSAGE: "true"
+      DATABASE_SAVE_MESSAGE_UPDATE: "true"
+      DATABASE_SAVE_DATA_CONTACTS: "true"
+      DATABASE_SAVE_DATA_CHATS: "true"
+      DATABASE_SAVE_DATA_LABELS: "true"
+      DATABASE_SAVE_DATA_HISTORIC: "true"
+      # Redis
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: redis://:${REDIS_PASSWORD}@redis:6379/0
+      CACHE_REDIS_PREFIX_KEY: evolution
+      CACHE_REDIS_SAVE_INSTANCES: "false"
+      CACHE_LOCAL_ENABLED: "false"
+      # Authentication
+      AUTHENTICATION_TYPE: apikey
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY}
+      AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES: "true"
+      # WhatsApp session
+      CONFIG_SESSION_PHONE_CLIENT: "WhatsApp Agent"
+      CONFIG_SESSION_PHONE_NAME: "Chrome"
+      # QR Code
+      QRCODE_LIMIT: 30
+      QRCODE_COLOR: "#198754"
+      # Webhooks (global off; per-instance webhook set by bridge)
+      WEBHOOK_GLOBAL_ENABLED: "false"
+      WEBHOOK_EVENTS_MESSAGES_UPSERT: "true"
+      WEBHOOK_EVENTS_CONNECTION_UPDATE: "true"
+      WEBHOOK_EVENTS_QRCODE_UPDATED: "true"
+    volumes:
+      - evolution_instances:/evolution/instances
+    networks:
+      - wa-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      # Node is guaranteed present (it's the app runtime). Assumes GET / returns
+      # <500 — verify this during rollout; adjust the path if it doesn't.
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:8080/', r => process.exit(r.statusCode < 500 ? 0 : 1)).on('error', () => process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+
+  bridge:
+    build:
+      context: ./bridge
+      dockerfile: Dockerfile
+    expose:
+      - "5021"
+    environment:
+      EVOLUTION_API_URL: http://evolution-api:8080
+      EVOLUTION_API_KEY: ${EVOLUTION_API_KEY}
+      INSTANCE_NAME: ${INSTANCE_NAME:-ai-tools-wa}
+      BRIDGE_PORT: 5021
+      WEBHOOK_URL: http://bridge:5021/webhook
+      WEBHOOK_SECRET: ${WEBHOOK_SECRET}
+      INITIAL_ALLOWED_NUMBERS: ${INITIAL_ALLOWED_NUMBERS:-}
+      LOG_LEVEL: INFO
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:-evolution}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      MEDIA_DIR: /app/media
+      # --- AI: everything runs on DeepInfra, no local models ---------------
+      DEEPINFRA_API_KEY: ${DEEPINFRA_API_KEY}
+      AI_BASE_URL: https://api.deepinfra.com/v1/openai
+      AI_MODEL: ${AI_MODEL:-openai/gpt-oss-120b}
+      AI_API_KEY: ${DEEPINFRA_API_KEY}
+      AI_MAX_RETRIES: "4"
+      AGENT_TOOL_MODE: native
+      AI_EMBEDDING_URL: https://api.deepinfra.com/v1/openai
+      AI_EMBEDDING_MODEL: ${AI_EMBEDDING_MODEL:-BAAI/bge-m3}
+      AI_EMBEDDING_API: openai
+      EMBEDDING_DIM: "1024"
+      # --- Voice (voice note in -> voice note out) --------------------------
+      VOICE_ENABLED: "true"
+      STT_PROVIDER: deepinfra
+      STT_MODEL: ${STT_MODEL:-openai/whisper-large-v3-turbo}
+      TTS_PROVIDER: auto
+      TTS_VOICE_EN: ${TTS_VOICE_EN:-en-US-JennyNeural}
+      TTS_VOICE_AR: ${TTS_VOICE_AR:-ar-SA-HamedNeural}
+      # --- Images (image-to-image, text-to-image, vision) -------------------
+      IMAGE_EDIT_MODEL: ${IMAGE_EDIT_MODEL:-black-forest-labs/FLUX.1-Kontext-dev}
+      IMAGE_GEN_MODEL: ${IMAGE_GEN_MODEL:-black-forest-labs/FLUX-1-schnell}
+      VISION_MODEL: ${VISION_MODEL:-Qwen/Qwen3-VL-30B-A3B-Instruct}
+      # --- AI Tools platform, reached through the gateway -------------------
+      CORTEX_GATEWAY_URL: http://gateway:8080
+      CORTEX_GATEWAY_API_KEY: ${GATEWAY_API_KEY}
+    volumes:
+      - media_data:/app/media
+    networks:
+      - wa-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      evolution-api:
+        condition: service_started
+      gateway:
+        condition: service_started
+    healthcheck:
+      # No curl/wget in python:3.11-slim — use the already-installed httpx.
+      test: ["CMD", "python", "-c", "import httpx,sys; sys.exit(0 if httpx.get('http://localhost:5021/health', timeout=3).status_code==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+  # Bridges the WhatsApp agent to the AI Tools hub (e-Library, OCR, classifier,
+  # BD analyzer, tender generator). Logs in to the hub with a dedicated service
+  # account and exposes a uniform submit/poll API to the bridge. Internal only.
+  gateway:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    expose:
+      - "8080"
+    environment:
+      GATEWAY_API_KEY: ${GATEWAY_API_KEY}
+      CORTEX_SERVICE_USERNAME: ${CORTEX_SERVICE_USERNAME:-wa-gateway}
+      CORTEX_SERVICE_PASSWORD: ${CORTEX_SERVICE_PASSWORD}
+      CORTEX_HUB_BASE_URL: ${CORTEX_HUB_BASE_URL:-https://ai-tool.loopstech.com}
+      HTTP_TIMEOUT_SECONDS: "300"
+      LOG_LEVEL: INFO
+    networks:
+      - wa-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  evolution_instances:
+  media_data:
+
+networks:
+  wa-network:
+    driver: bridge
