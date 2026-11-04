@@ -434,3 +434,43 @@ async def get_tool_config(name: str, db: AsyncSession = Depends(get_db), _: str 
         return JSONResponse(json.loads(tool.config or "{}"))
     except Exception:
         return JSONResponse({})
+
+
+# ---------------------------------------------------------------------------
+# WhatsApp connection (QR code)
+# ---------------------------------------------------------------------------
+
+async def _evolution_get(path: str) -> dict:
+    import httpx
+
+    from whatsapp import EVOLUTION_API_KEY, EVOLUTION_API_URL, INSTANCE_NAME
+
+    async with httpx.AsyncClient(timeout=20) as client:
+        r = await client.get(
+            f"{EVOLUTION_API_URL}{path.replace('{i}', INSTANCE_NAME)}", headers={"apikey": EVOLUTION_API_KEY}
+        )
+        r.raise_for_status()
+        return r.json()
+
+
+@router.get("/connect", response_class=HTMLResponse)
+async def connect_page(request: Request, _: str = Depends(require_auth)):
+    return templates.TemplateResponse(request, "connect.html", {})
+
+
+@router.get("/connect/status")
+async def connect_status(_: str = Depends(require_auth)):
+    """Connection state, plus a fresh QR code while the instance is not yet paired."""
+    try:
+        state = (await _evolution_get("/instance/connectionState/{i}")).get("instance", {}).get("state", "unknown")
+    except Exception as exc:
+        return JSONResponse({"state": "unreachable", "error": str(exc)[:200]})
+    out = {"state": state}
+    if state != "open":
+        try:
+            qr = await _evolution_get("/instance/connect/{i}")
+            out["qr"] = qr.get("base64")
+            out["pairing_code"] = qr.get("pairingCode")
+        except Exception as exc:
+            out["error"] = str(exc)[:200]
+    return JSONResponse(out)

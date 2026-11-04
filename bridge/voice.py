@@ -1,22 +1,26 @@
 """
 Voice support:
-  - STT: faster-whisper (local, CPU/GPU)
-  - TTS: edge-tts (Microsoft neural voices, supports Arabic + English)
+  - STT: DeepInfra Whisper large-v3-turbo by default (STT_PROVIDER=deepinfra);
+         local faster-whisper if STT_PROVIDER=local (CPU/GPU hosts).
+  - TTS: edge-tts (Microsoft neural voices, Arabic + English) first; if it is
+         unreachable, a DeepInfra TTS model (TTS_PROVIDER=auto|edge|deepinfra).
 """
 from __future__ import annotations
 
 import asyncio
-import io
 import logging
 import os
-import tempfile
+import re
 from pathlib import Path
 
 logger = logging.getLogger("bridge.voice")
 
 WHISPER_MODEL_SIZE = os.getenv("WHISPER_MODEL", "base")
+STT_PROVIDER = os.getenv("STT_PROVIDER", "deepinfra").lower()
+TTS_PROVIDER = os.getenv("TTS_PROVIDER", "auto").lower()
+TTS_MAX_CHARS = int(os.getenv("TTS_MAX_CHARS", "2500"))
 
-# Lazy singletons
+# Lazy singletons (local STT only)
 _whisper_model = None
 _whisper_lock = asyncio.Lock()
 
@@ -44,10 +48,19 @@ async def _get_whisper():
 # ---------------------------------------------------------------------------
 
 async def transcribe(audio_path: Path, language: str | None = None) -> str | None:
-    """
-    Transcribe an audio file to text using faster-whisper.
-    Returns transcribed text or None if unavailable/failed.
-    """
+    """Transcribe an audio file to text. Returns text, or None if unavailable/failed."""
+    if STT_PROVIDER != "local":
+        import deepinfra
+
+        try:
+            audio = await asyncio.to_thread(audio_path.read_bytes)
+        except Exception as exc:
+            logger.error("Cannot read audio %s: %s", audio_path, exc)
+            return None
+        text = await deepinfra.transcribe(audio, audio_path.name, language)
+        logger.info("Transcribed %s via DeepInfra: %d chars", audio_path.name, len(text or ""))
+        return text
+
     model = await _get_whisper()
     if model is None:
         logger.warning("Whisper model not loaded — skipping transcription.")
@@ -56,42 +69,21 @@ async def transcribe(audio_path: Path, language: str | None = None) -> str | Non
     try:
         def _run():
             # Constrain to the two supported languages. Detect first; keep the
-            # result only if it is English or Arabic. Otherwise, DON'T just
-            # assume Arabic — that used to be the fallback (Whisper mislabels
-            # Arabic as e.g. Hebrew, both RTL Semitic), but the same "not
-            # en/ar" bucket also catches English misdetected as something
-            # else entirely (confirmed live: a clear English voice note came
-            # back detected=ur, and forcing Arabic on it produced a garbled,
-            # wrong-language transcript). Run BOTH forced passes and keep
-            # whichever one Whisper is actually more confident about.
-            forced = language  # honour an explicit caller override if given
+            # result only if it is English or Arabic, otherwise run both forced
+            # passes and keep the one Whisper is more confident about.
+            forced = language
             if forced is None:
                 segs, info = model.transcribe(
                     str(audio_path), beam_size=5, language=None, vad_filter=True,
                 )
-                detected = info.language
-                if detected in ("en", "ar"):
-                    text = " ".join(s.text for s in segs).strip()
-                    logger.info(
-                        "Transcribed %s: detected=%s (kept), %d chars",
-                        audio_path.name, detected, len(text),
-                    )
-                    return text
-                logger.info(
-                    "Transcribed %s: detected=%s (unsupported) — comparing forced en/ar",
-                    audio_path.name, detected,
-                )
+                if info.language in ("en", "ar"):
+                    return " ".join(s.text for s in segs).strip()
                 return _best_of_forced(model, audio_path)
 
-            segs, info = model.transcribe(
+            segs, _ = model.transcribe(
                 str(audio_path), beam_size=5, language=forced, vad_filter=True,
             )
-            text = " ".join(s.text for s in segs).strip()
-            logger.info(
-                "Transcribed %s: lang=%s (forced), %d chars",
-                audio_path.name, forced, len(text),
-            )
-            return text
+            return " ".join(s.text for s in segs).strip()
 
         return await asyncio.to_thread(_run)
     except Exception as exc:
@@ -100,13 +92,9 @@ async def transcribe(audio_path: Path, language: str | None = None) -> str | Non
 
 
 def _best_of_forced(model, audio_path: Path) -> str:
-    """Transcribe forced as English and forced as Arabic, and keep whichever
-    Whisper is actually more confident about (mean per-segment avg_logprob,
-    less negative = better) instead of assuming ambiguous audio is always
-    Arabic. Costs a second transcription pass, but only for audio Whisper's
-    own language auto-detect couldn't confidently place in en/ar to begin
-    with — the common, cheap case (a single confident pass) is unaffected."""
-    best_text, best_lang, best_score = "", None, float("-inf")
+    """Transcribe forced as English and forced as Arabic, keep whichever Whisper
+    is more confident about (mean per-segment avg_logprob, less negative = better)."""
+    best_text, best_score = "", float("-inf")
     for lang in ("en", "ar"):
         try:
             segs, _ = model.transcribe(str(audio_path), beam_size=5, language=lang, vad_filter=True)
@@ -118,10 +106,8 @@ def _best_of_forced(model, audio_path: Path) -> str:
             continue
         text = " ".join(s.text for s in segs).strip()
         score = sum(getattr(s, "avg_logprob", 0.0) for s in segs) / len(segs)
-        logger.info("  forced=%s: avg_logprob=%.3f, %d chars", lang, score, len(text))
         if score > best_score:
-            best_text, best_lang, best_score = text, lang, score
-    logger.info("Picked forced=%s (avg_logprob=%.3f)", best_lang, best_score)
+            best_text, best_score = text, score
     return best_text
 
 
@@ -129,43 +115,82 @@ def _best_of_forced(model, audio_path: Path) -> str:
 # TTS
 # ---------------------------------------------------------------------------
 
-# edge-tts voice names
 VOICES = {
     "en": os.getenv("TTS_VOICE_EN", "en-US-JennyNeural"),
     "ar": os.getenv("TTS_VOICE_AR", "ar-SA-HamedNeural"),
 }
 
+_URL_RE = re.compile(r"https?://\S+|www\.\S+")
+_EMOJI_RE = re.compile(
+    "[\U0001F000-\U0001FAFF\U00002600-\U000027BF\U0000FE0F\U0000200D\U00002B00-\U00002BFF]+"
+)
+_MD_RE = re.compile(r"[*_~`#>|]+")
+_BULLET_RE = re.compile(r"^[\s•\-–—·●▪◦]+", re.M)
 
-async def synthesize(text: str, language: str = "en") -> bytes | None:
-    """
-    Convert text to speech using edge-tts.
-    Returns MP3 bytes or None if unavailable/failed.
-    """
-    if not text:
-        return None
 
+def prepare_for_speech(text: str) -> str:
+    """Make a chat reply listenable: drop URLs, emoji, markdown marks and
+    bullet glyphs, collapse whitespace, cap the length at a sentence end."""
+    text = _URL_RE.sub(" ", text or "")
+    text = _EMOJI_RE.sub(" ", text)
+    text = _MD_RE.sub(" ", text)
+    text = _BULLET_RE.sub("", text)
+    text = re.sub(r"\s*\n+\s*", ". ", text)
+    text = re.sub(r"\.\s*\.", ".", text)
+    text = re.sub(r"\s{2,}", " ", text).strip()
+    if len(text) > TTS_MAX_CHARS:
+        cut = text[:TTS_MAX_CHARS]
+        end = max(cut.rfind(". "), cut.rfind("؟"), cut.rfind("!"), cut.rfind("؛"))
+        text = cut[: end + 1] if end > TTS_MAX_CHARS // 2 else cut
+    return text
+
+
+async def _edge_tts(text: str, language: str) -> bytes | None:
     try:
         import edge_tts
 
         voice = VOICES.get(language, VOICES["en"])
         communicate = edge_tts.Communicate(text, voice)
 
-        audio_chunks: list[bytes] = []
-        async for chunk in communicate.stream():
-            if chunk["type"] == "audio":
-                audio_chunks.append(chunk["data"])
+        async def _collect() -> bytes:
+            chunks: list[bytes] = []
+            async for chunk in communicate.stream():
+                if chunk["type"] == "audio":
+                    chunks.append(chunk["data"])
+            return b"".join(chunks)
 
-        if not audio_chunks:
-            logger.warning("TTS returned no audio for language=%s", language)
+        audio = await asyncio.wait_for(_collect(), timeout=60)
+        if not audio:
+            logger.warning("edge-tts returned no audio (lang=%s)", language)
             return None
-
-        audio_bytes = b"".join(audio_chunks)
-        logger.info("TTS synthesized %d bytes (lang=%s, voice=%s)", len(audio_bytes), language, voice)
-        return audio_bytes
-
+        logger.info("edge-tts synthesized %d bytes (lang=%s, voice=%s)", len(audio), language, voice)
+        return audio
     except ImportError:
-        logger.warning("edge-tts not installed — voice replies disabled.")
+        logger.warning("edge-tts not installed.")
         return None
     except Exception as exc:
-        logger.error("TTS synthesis failed: %s", exc)
+        logger.warning("edge-tts failed: %s", exc)
         return None
+
+
+async def synthesize(text: str, language: str = "en") -> bytes | None:
+    """Convert a reply to speech. Returns audio bytes (MP3 from edge-tts, WAV
+    from the DeepInfra fallback; Evolution API transcodes either to the
+    WhatsApp voice-note format) or None if every provider failed."""
+    text = prepare_for_speech(text)
+    if not text:
+        return None
+
+    if TTS_PROVIDER in ("auto", "edge"):
+        audio = await _edge_tts(text, language)
+        if audio:
+            return audio
+        if TTS_PROVIDER == "edge":
+            return None
+
+    import deepinfra
+
+    audio = await deepinfra.synthesize(text, language)
+    if audio:
+        logger.info("DeepInfra TTS synthesized %d bytes (lang=%s)", len(audio), language)
+    return audio

@@ -134,6 +134,18 @@ _WHATSAPP_FORMAT_RULES = (
 )
 
 
+# Used instead of the WhatsApp text rules when the user spoke and the reply
+# will be read aloud as a voice note.
+_VOICE_FORMAT_RULES = (
+    "--- Output Style (spoken reply) ---\n"
+    "The user sent a VOICE NOTE and your reply will be READ ALOUD to them as a voice note. "
+    "Write the way a helpful person speaks: short natural sentences, no lists, no bullets, "
+    "no tables, no Markdown, no emoji, no URLs or file paths. Spell out what matters in words. "
+    "Keep it under about 60 words unless the answer genuinely needs more. "
+    "If a file or image will be delivered, just say so briefly."
+)
+
+
 @dataclass
 class AgentResult:
     content: str
@@ -146,6 +158,8 @@ class AgentResult:
     attachment_bytes: bytes | None = None
     attachment_name: str | None = None
     attachment_mime: str | None = None
+    # Every file produced this request, in order: (bytes, name, mime).
+    attachments: list = field(default_factory=list)
 
 
 class AgentRunner:
@@ -193,8 +207,9 @@ class AgentRunner:
         language: str,
         attachment_meta: dict | None = None,
         session: ToolSession | None = None,
+        is_voice: bool = False,
     ) -> AgentResult:
-        system_prompt = self._build_system(role_prompt, language)
+        system_prompt = self._build_system(role_prompt, language, is_voice)
         # Native mode sends the OpenAI tools schema; prompt mode describes the
         # tools (and the JSON envelope) in the system prompt instead.
         if self.tool_mode == "native":
@@ -217,7 +232,7 @@ class AgentRunner:
         final_content = ""
         final_confidence = 1.0
         final_iterations = 0
-        final_attachment: tuple[bytes, str, str] | None = None
+        final_attachments: list = []
         connection_failures = 0
 
         # The outer loop bound must cover whichever retry budget is larger, so
@@ -228,7 +243,7 @@ class AgentRunner:
         for attempt in range(max_attempts):
             attempt_messages = list(messages)
             try:
-                result_text, calls, iterations, attachment = await self._react_loop(
+                result_text, calls, iterations, attachments = await self._react_loop(
                     attempt_messages, tools_schema, session
                 )
             except LLMCallError as exc:
@@ -251,7 +266,7 @@ class AgentRunner:
 
             tool_calls_made.extend(calls)
             final_iterations = iterations
-            final_attachment = attachment
+            final_attachments = attachments
 
             if not self.confidence_enabled:
                 final_content = result_text
@@ -286,7 +301,8 @@ class AgentRunner:
                 final_content = result_text
                 break
 
-        attachment_bytes, attachment_name, attachment_mime = final_attachment or (None, None, None)
+        first = final_attachments[0] if final_attachments else (None, None, None)
+        attachment_bytes, attachment_name, attachment_mime = first
         return AgentResult(
             content=final_content or "I'm sorry, I couldn't generate a response.",
             language=language,
@@ -296,6 +312,7 @@ class AgentRunner:
             attachment_bytes=attachment_bytes,
             attachment_name=attachment_name,
             attachment_mime=attachment_mime,
+            attachments=final_attachments,
         )
 
     # ------------------------------------------------------------------
@@ -307,14 +324,14 @@ class AgentRunner:
         messages: list[dict],
         tools_schema: list[dict],
         session: ToolSession | None = None,
-    ) -> tuple[str, list[str], int, tuple[bytes, str, str] | None]:
+    ) -> tuple[str, list[str], int, list]:
         """Run the Reason-Act loop.
-        Returns (final_text, tool_names_used, iterations, attachment) —
-        attachment is (file_bytes, file_name, file_mime) from the first tool
-        result this request that set one, or None."""
+        Returns (final_text, tool_names_used, iterations, attachments) —
+        attachments is every (file_bytes, file_name, file_mime) the tool
+        results of this request carried, in order."""
         tool_calls_made: list[str] = []
         nudged_to_reconsider = False
-        captured_attachment: tuple[bytes, str, str] | None = None
+        captured: list = []
 
         for iteration in range(self.max_iterations):
             kwargs: dict = {
@@ -353,12 +370,7 @@ class AgentRunner:
                     fn_name = tc.function.name
                     tool_calls_made.append(fn_name)
                     tool_result = await self._execute_tool(fn_name, tc.function.arguments, session)
-                    if captured_attachment is None and tool_result.file_bytes:
-                        captured_attachment = (
-                            tool_result.file_bytes,
-                            tool_result.file_name or "file",
-                            tool_result.file_mime or "application/octet-stream",
-                        )
+                    captured.extend(tool_result.all_files())
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc.id,
@@ -377,12 +389,7 @@ class AgentRunner:
                     name, args = call
                     tool_calls_made.append(name)
                     tool_result = await self._execute_tool(name, json.dumps(args), session)
-                    if captured_attachment is None and tool_result.file_bytes:
-                        captured_attachment = (
-                            tool_result.file_bytes,
-                            tool_result.file_name or "file",
-                            tool_result.file_mime or "application/octet-stream",
-                        )
+                    captured.extend(tool_result.all_files())
                     messages.append({"role": "assistant", "content": content})
                     messages.append({
                         "role": "user",
@@ -420,14 +427,14 @@ class AgentRunner:
                 continue
 
             # Final answer
-            return content, tool_calls_made, iteration + 1, captured_attachment
+            return content, tool_calls_made, iteration + 1, captured
 
         # Exhausted iterations — return whatever the last assistant message was
         last_assistant = next(
             (m.get("content", "") for m in reversed(messages) if m.get("role") == "assistant"),
             "I'm sorry, I couldn't complete the task within the allowed steps.",
         )
-        return last_assistant, tool_calls_made, self.max_iterations, captured_attachment
+        return last_assistant, tool_calls_made, self.max_iterations, captured
 
     async def _execute_tool(
         self, name: str, arguments_json: str, session: ToolSession | None = None
@@ -512,14 +519,17 @@ class AgentRunner:
         ]
         return "\n".join(lines)
 
-    def _build_system(self, role_prompt: str, language: str) -> str:
+    def _build_system(self, role_prompt: str, language: str, is_voice: bool = False) -> str:
         master = self.settings.get("master_prompt", _MASTER_PROMPT_FALLBACK).strip()
         parts = [master]
         if role_prompt:
             parts.append(f"\n--- User Role Context ---\n{role_prompt}")
         parts.append(f"\n--- Language ---\n{lang_instruction(language)}")
         parts.append(f"\n{_LANGUAGE_POLICY}")
-        parts.append(f"\n{_WHATSAPP_FORMAT_RULES}")
+        parts.append(f"\n{_VOICE_FORMAT_RULES if is_voice else _WHATSAPP_FORMAT_RULES}")
+        extra = getattr(self, "system_extra", "")
+        if extra:
+            parts.append(f"\n{extra}")
         return "\n".join(parts)
 
     @staticmethod
@@ -531,6 +541,8 @@ class AgentRunner:
         path = attachment_meta.get("path", "")
         caption = attachment_meta.get("caption", "")
         file_desc = f"[Attached file: {name} | type: {mime} | path: {path}]"
+        if attachment_meta.get("recent"):
+            file_desc += " (sent earlier in this conversation, not with this message)"
         if caption:
             file_desc += f" | Caption: {caption}"
         return f"{text}\n{file_desc}".strip() if text else file_desc

@@ -158,7 +158,10 @@ DEFAULT_SETTINGS: list[tuple[str, str, str, str]] = [
     ("confidence_enabled",    "false","confidence","Enable confidence scoring layer"),
     ("confidence_threshold",  "0.7",  "confidence","Minimum confidence score (0.0–1.0) to accept a response"),
     ("confidence_max_retries","2",    "confidence","Max retries when confidence is below threshold"),
-    ("voice_enabled",         "false","voice",     "Enable voice message transcription and TTS replies"),
+    ("voice_enabled",         _env_default("VOICE_ENABLED", "false"), "voice", "Enable voice: transcribe voice notes and answer them with a voice note"),
+    ("voice_reply_mode",      "voice_only", "voice", "Reply to a voice note with: voice_only | voice_and_text (long answers always add text)"),
+    ("multi_agent_enabled",   "true", "ai", "Use the orchestrator + specialist agents (knowledge, documents, tender, media, ops) instead of one flat agent"),
+    ("recent_attachment_minutes", "30", "context", "A photo/document sent within this many minutes stays available to follow-up text or voice requests (0 = off)"),
 ]
 
 DEFAULT_ROLES: list[tuple[str, str, str]] = [
@@ -167,6 +170,19 @@ DEFAULT_ROLES: list[tuple[str, str, str]] = [
     ("vip",   "VIP User",      "You are assisting a VIP user. Prioritize their requests and provide extra detail."),
     ("staff", "Staff Member",  "You are assisting a staff member. They may need help with internal processes."),
 ]
+
+
+# Tools that start disabled on a fresh install. They need infrastructure this
+# deployment may not have (PH OCR service, local knowledge table) or are
+# powerful (SSH / DB / HTTP) so an admin switches them on deliberately in /tools.
+DEFAULT_DISABLED_TOOLS = {
+    t.strip()
+    for t in os.getenv(
+        "DISABLED_TOOLS",
+        "ocr_extract_text,query_database,execute_ssh_command,call_external_api,search_knowledge_base",
+    ).split(",")
+    if t.strip()
+}
 
 
 async def _seed(db: AsyncSession) -> None:
@@ -189,7 +205,7 @@ async def _seed(db: AsyncSession) -> None:
                 name=cls.name,
                 display_name=cls.display_name,
                 description=cls.description,
-                enabled=True,
+                enabled=cls.name not in DEFAULT_DISABLED_TOOLS,
                 config="{}",
             ))
 

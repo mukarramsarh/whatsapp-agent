@@ -29,3 +29,6 @@ edge-tts>=7.0.0
 # SSH tool
 # >=2.24.0 required: fixes CVE-2026-62949 (peer-supplied zero send_pktsize freezes the connection)
 asyncssh==2.24.0
+
+# Image handling (normalise/downscale photos before editing)
+pillow==10.4.0

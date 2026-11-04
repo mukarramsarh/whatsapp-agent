@@ -15,7 +15,7 @@ import logging
 from typing import Awaitable, Callable
 
 from agent.tools.base import ToolSession
-from whatsapp import send_media, send_text
+from whatsapp import send_media, send_text, send_voice
 
 logger = logging.getLogger("bridge.async_job")
 
@@ -43,7 +43,16 @@ def start_background_job(
             await send_text(session.remote_jid, f"Sorry, something went wrong while processing that: {exc}")
             return
         if text:
-            await send_text(session.remote_jid, text)
+            sent_voice = False
+            if session.voice_reply:
+                import voice
+                from wa_format import to_plain
+
+                audio = await voice.synthesize(to_plain(text), session.language)
+                if audio:
+                    sent_voice = await send_voice(session.remote_jid, audio)
+            if not sent_voice or len(text) > 700:
+                await send_text(session.remote_jid, text)
         if file_bytes:
             await send_media(
                 session.remote_jid,

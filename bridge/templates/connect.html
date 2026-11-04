@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% set active = "connect" %}
+{% block content %}
+<div class="max-w-xl">
+  <h1 class="text-xl font-semibold text-slate-800 mb-1">Connect WhatsApp</h1>
+  <p class="text-sm text-slate-500 mb-5">
+    Open WhatsApp on the phone that owns the agent's number &rarr; <b>Linked devices</b> &rarr;
+    <b>Link a device</b>, then scan the code below. The code refreshes automatically.
+  </p>
+
+  <div class="bg-white rounded-xl shadow-sm p-6 text-center">
+    <div id="state" class="inline-block text-xs font-medium px-3 py-1 rounded-full bg-slate-100 text-slate-600 mb-4">checking&hellip;</div>
+    <div id="qrbox" class="flex items-center justify-center min-h-[280px]">
+      <span class="text-sm text-slate-400">Waiting for the WhatsApp service&hellip;</span>
+    </div>
+    <p id="pair" class="text-sm text-slate-600 mt-3 hidden"></p>
+    <p id="err" class="text-xs text-red-500 mt-3 hidden"></p>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const stateEl = document.getElementById('state');
+  const box = document.getElementById('qrbox');
+  const pair = document.getElementById('pair');
+  const err = document.getElementById('err');
+  let lastQr = null;
+
+  function badge(text, cls) {
+    stateEl.textContent = text;
+    stateEl.className = 'inline-block text-xs font-medium px-3 py-1 rounded-full mb-4 ' + cls;
+  }
+
+  async function tick() {
+    try {
+      const r = await fetch('/connect/status', { credentials: 'same-origin' });
+      const d = await r.json();
+      err.classList.add('hidden');
+      if (d.state === 'open') {
+        badge('Connected', 'bg-green-100 text-green-700');
+        box.innerHTML = '<div class="text-green-600 text-lg font-medium">&#10003; WhatsApp is linked and the agent is live.</div>';
+        pair.classList.add('hidden');
+        lastQr = null;
+        return setTimeout(tick, 8000);
+      }
+      badge(d.state === 'unreachable' ? 'Service unreachable' : 'Not linked yet', 'bg-amber-100 text-amber-700');
+      if (d.qr && d.qr !== lastQr) {
+        lastQr = d.qr;
+        box.innerHTML = '<img alt="WhatsApp QR code" class="w-64 h-64" src="' + d.qr + '">';
+      }
+      if (d.pairing_code) { pair.textContent = 'Pairing code: ' + d.pairing_code; pair.classList.remove('hidden'); }
+      if (d.error) { err.textContent = d.error; err.classList.remove('hidden'); }
+    } catch (e) {
+      badge('Offline', 'bg-red-100 text-red-700');
+    }
+    setTimeout(tick, 4000);
+  }
+  tick();
+</script>
+{% endblock %}

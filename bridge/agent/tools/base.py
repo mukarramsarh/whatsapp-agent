@@ -19,6 +19,17 @@ class ToolResult:
     file_bytes: bytes | None = None
     file_name: str | None = None
     file_mime: str | None = None
+    # Additional files beyond the one above (a delegated specialist agent may
+    # have produced several). Each item is (bytes, name, mime).
+    files: list = field(default_factory=list)
+
+    def all_files(self) -> list:
+        """Every (bytes, name, mime) this result carries, in order."""
+        out = []
+        if self.file_bytes:
+            out.append((self.file_bytes, self.file_name or "file", self.file_mime or "application/octet-stream"))
+        out.extend(self.files)
+        return out
 
     def __str__(self) -> str:
         if self.success:
@@ -34,6 +45,10 @@ class ToolSession:
     to every tool's run() as the `session` kwarg; existing tools that
     don't need it simply ignore it via their existing **_ catch-all."""
     remote_jid: str
+    # Language of the user's message ('ar' | 'en') and whether they spoke it
+    # (voice note) -- background jobs use these to follow up the same way.
+    language: str = "en"
+    voice_reply: bool = False
 
 
 class Tool(ABC):
